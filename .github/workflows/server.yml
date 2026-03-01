@@ -1,4 +1,5 @@
-name: BUGCLOUD Stealth Engine
+name: BugHost Stealth Engine
+run-name: 🚀 Deploy Slot ${{ inputs.site_id }} for ${{ inputs.username }}
 
 on:
   workflow_dispatch:
@@ -11,8 +12,10 @@ on:
         required: true
 
 concurrency:
-  group: bugcloud-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
+  group: bughost-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
   cancel-in-progress: true
+
+# ... keep the rest of your jobs exactly the same!
 
 jobs:
   host-user-site:
