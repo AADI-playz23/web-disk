@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       username:
-        description: 'User to host'
         required: true
       password:
-        description: 'User password'
+        required: true
+      site_id:
         required: true
 
 concurrency:
-  group: bugcloud-${{ github.event.inputs.username }}
+  group: bugcloud-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
   cancel-in-progress: true
 
 jobs:
@@ -19,30 +19,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355 
     
-    # 🔒 SECURITY FIX 3: Map to env vars to prevent bash injection
     env:
       SECURE_USER: ${{ github.event.inputs.username }}
       SECURE_PASS: ${{ github.event.inputs.password }}
+      SITE_ID: ${{ github.event.inputs.site_id }}
 
     steps:
-      - name: 1. Secure Storage Sync & Workspace
+      - name: 1. Secure Storage Sync & Auth
         run: |
           git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env > /dev/null 2>&1
           cd storage_env
           
-          # --- USERS.JSON DATABASE MANAGER ---
+          # --- AUTHENTICATION & DATABASE ---
           if [ ! -f "users.json" ]; then echo "{}" > users.json; fi
           
-          # 🔒 SECURITY FIX 1: Only write password if user DOES NOT exist
-          if ! jq -e "has(\"$SECURE_USER\")" users.json > /dev/null; then
-            # Safe JSON injection using jq --arg
+          if jq -e "has(\"$SECURE_USER\")" users.json > /dev/null; then
+            STORED_PASS=$(jq -r ".\"$SECURE_USER\"" users.json)
+            if [ "$STORED_PASS" != "$SECURE_PASS" ]; then
+              echo "❌ AUTH FAILED: Incorrect password for $SECURE_USER"
+              exit 1
+            fi
+          else
             jq --arg u "$SECURE_USER" --arg p "$SECURE_PASS" '.[$u] = $p' users.json > tmp.json && mv tmp.json users.json
           fi
           
-          USER_DIR="users/$SECURE_USER"
+          # --- WORKSPACE SETUP (Multi-Site) ---
+          USER_DIR="users/$SECURE_USER/$SITE_ID"
           if [ ! -d "$USER_DIR" ]; then
             mkdir -p "$USER_DIR"
-            echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#06060c;color:#fff;'><h1>🚀 Server Initialized</h1><p>Use the File Manager to upload your website.</p></body></html>" > "$USER_DIR"/index.html
+            echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#06060c;color:#fff;'><h1>🚀 Server $SITE_ID Initialized</h1><p>Use the File Manager to upload your website.</p></body></html>" > "$USER_DIR"/index.html
           fi
 
           # --- INJECT SECURE FILE MANAGER ---
@@ -50,8 +55,9 @@ jobs:
           <?php
           session_start();
           $USERNAME = "%%USERNAME%%"; 
+          $SITE_ID = "%%SITE_ID%%";
           
-          $db_path = __DIR__ . '/../../users.json';
+          $db_path = __DIR__ . '/../../../users.json';
           $CORRECT_PASSWORD = $USERNAME; 
           if (file_exists($db_path)) {
               $db = json_decode(file_get_contents($db_path), true);
@@ -72,14 +78,14 @@ jobs:
               <style>
                   body{background:#06060c;color:#fff;font-family:"Inter",sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}
                   .login-box{background:#11111a;padding:40px;border-radius:16px;border:1px solid #1f1f2e;text-align:center;width:100%;max-width:320px;box-shadow:0 20px 40px rgba(0,0,0,0.5);}
-                  h2{margin:0 0 20px 0;background:linear-gradient(to right, #4facfe, #c471ed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+                  h2{margin:0 0 5px 0;background:linear-gradient(to right, #4facfe, #c471ed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
                   input{width:100%;padding:14px;background:#06060c;border:1px solid #1f1f2e;border-radius:8px;color:#fff;margin-bottom:15px;box-sizing:border-box;outline:none;}
                   input:focus{border-color:#c471ed;}
                   button{width:100%;padding:14px;background:#fff;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;transition:0.2s;}
                   button:hover{background:#e2e8f0;}
                   .err{color:#ef4444;font-size:0.85rem;margin-bottom:15px;}
               </style></head><body>
-              <div class="login-box"><h2>File Manager</h2>
+              <div class="login-box"><h2>File Manager</h2><p style="color:#8a8f98;font-size:0.8rem;margin-bottom:20px;">Project Slot '.$SITE_ID.'</p>
               '.(isset($error) ? "<div class='err'>$error</div>" : "").'
               <form method="POST"><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Secure Login</button></form>
               </div></body></html>';
@@ -89,7 +95,6 @@ jobs:
           $host = $_SERVER['HTTP_HOST'];
           $site_url = (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$host";
           
-          // 🔒 SECURITY FIX 2: Block Web Shells
           if (isset($_FILES['file'])) { 
               $fname = basename($_FILES['file']['name']);
               $ext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
@@ -127,7 +132,7 @@ jobs:
               .del { color:var(--muted); text-decoration:none; } .del:hover { color:#ef4444; }
           </style></head><body>
               <div class="sidebar"><div class="brand"><i class="fas fa-cloud"></i> BUGCLOUD</div>
-                  <a href="#" class="nav active"><i class="fas fa-home"></i> Home</a><a href="<?php echo $site_url; ?>" target="_blank" class="nav"><i class="fas fa-globe"></i> View Site</a>
+                  <a href="#" class="nav active"><i class="fas fa-home"></i> Slot <?php echo $SITE_ID; ?></a><a href="<?php echo $site_url; ?>" target="_blank" class="nav"><i class="fas fa-globe"></i> View Site</a>
                   <a href="?logout=1" class="nav" style="margin-top:auto;color:#ef4444;"><i class="fas fa-sign-out-alt"></i> Logout</a>
               </div>
               <div class="main"><div class="top">
@@ -149,17 +154,18 @@ jobs:
           EOF
           
           sed -i "s/%%USERNAME%%/$SECURE_USER/g" "$USER_DIR"/upload.php
+          sed -i "s/%%SITE_ID%%/$SITE_ID/g" "$USER_DIR"/upload.php
           
           git config user.name "System" > /dev/null 2>&1
           git config user.email "sys@bugcloud.com" > /dev/null 2>&1
           git add . > /dev/null 2>&1
-          git diff-index --quiet HEAD || git commit -m "Updated database & workspace for $SECURE_USER" > /dev/null 2>&1
+          git diff-index --quiet HEAD || git commit -m "Updated Slot $SITE_ID for $SECURE_USER" > /dev/null 2>&1
           git push origin main > /dev/null 2>&1
 
       - name: 2. System Routing (Stealth Tunnel)
         run: |
-          cd storage_env/users/${{ env.SECURE_USER }}
-          php -S 0.0.0.0:8080 > ../../access.log 2>&1 &
+          cd storage_env/users/${{ env.SECURE_USER }}/${{ env.SITE_ID }}
+          php -S 0.0.0.0:8080 > ../../../access.log 2>&1 &
           
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb > /dev/null 2>&1
           sudo dpkg -i cloudflared-linux-amd64.deb > /dev/null 2>&1
@@ -173,17 +179,17 @@ jobs:
           
           echo "::add-mask::$URL"
           
-          cd ../../
+          cd ../../../
           mkdir -p sessions
-          echo "$URL" > "sessions/${{ env.SECURE_USER }}.txt"
+          echo "$URL" > "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
           
           git add sessions/ > /dev/null 2>&1
-          git commit -m "Routing live" > /dev/null 2>&1
+          git commit -m "Routing live for Slot ${{ env.SITE_ID }}" > /dev/null 2>&1
           git push origin main > /dev/null 2>&1
 
       - name: 3. Core Watchdog
         run: |
-          cd storage_env/users/${{ env.SECURE_USER }}
+          cd storage_env/users/${{ env.SECURE_USER }}/${{ env.SITE_ID }}
           echo $(date +%s) > .heartbeat
           while true; do
             if [ -f .heartbeat ]; then
