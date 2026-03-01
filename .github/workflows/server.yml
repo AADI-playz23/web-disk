@@ -6,6 +6,9 @@ on:
       username:
         description: 'User to host'
         required: true
+      password:
+        description: 'User password'
+        required: true
 
 concurrency:
   group: bughost-${{ github.event.inputs.username }}
@@ -20,16 +23,18 @@ jobs:
       - name: 1. Secure Storage Sync & Workspace
         run: |
           USERNAME="${{ github.event.inputs.username }}"
+          PASSWORD="${{ github.event.inputs.password }}"
           
-          # 🔴 Clones your PRIVATE 'webstore' repo
+          # Clone PRIVATE storage
           git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env > /dev/null 2>&1
           cd storage_env
           
-          # --- THE USERS.JSON DATABASE MANAGER ---
+          # --- USERS.JSON DATABASE MANAGER ---
+          # Create file if missing
           if [ ! -f "users.json" ]; then echo "{}" > users.json; fi
-          if ! jq -e "has(\"$USERNAME\")" users.json > /dev/null; then
-            jq ". + {\"$USERNAME\": \"$USERNAME\"}" users.json > tmp.json && mv tmp.json users.json
-          fi
+          
+          # Write the CUSTOM password to the database
+          jq ". + {\"$USERNAME\": \"$PASSWORD\"}" users.json > tmp.json && mv tmp.json users.json
           
           USER_DIR="users/$USERNAME"
           if [ ! -d "$USER_DIR" ]; then
