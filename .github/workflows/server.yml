@@ -15,8 +15,6 @@ concurrency:
   group: bughost-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
   cancel-in-progress: true
 
-# ... keep the rest of your jobs exactly the same!
-
 jobs:
   host-user-site:
     runs-on: ubuntu-latest
@@ -46,7 +44,7 @@ jobs:
             jq --arg u "$SECURE_USER" --arg p "$SECURE_PASS" '.[$u] = $p' users.json > tmp.json && mv tmp.json users.json
           fi
           
-          # --- WORKSPACE SETUP (Multi-Site) ---
+          # --- WORKSPACE SETUP (Isolated Environment) ---
           USER_DIR="users/$SECURE_USER/$SITE_ID"
           if [ ! -d "$USER_DIR" ]; then
             mkdir -p "$USER_DIR"
@@ -76,7 +74,7 @@ jobs:
           if (isset($_GET['ping'])) { file_put_contents('.heartbeat', time()); die('pong'); }
 
           if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
-              echo '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BUGCLOUD Login</title>
+              echo '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BUGHOST Login</title>
               <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
               <style>
                   body{background:#06060c;color:#fff;font-family:"Inter",sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}
@@ -115,7 +113,7 @@ jobs:
           function formatSize($bytes) { if ($bytes == 0) return '-'; if ($bytes >= 1048576) return number_format($bytes/1048576, 2).' MB'; return number_format($bytes/1024, 2).' KB'; }
           $files = array_diff(scandir('.'), array('.', '..', 'upload.php', '.heartbeat'));
           ?>
-          <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BUGCLOUD Manager</title>
+          <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BUGHOST Manager</title>
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
           <style>
               :root { --bg: #0f111a; --side: #16192b; --primary: #3b82f6; --text: #e2e8f0; --muted: #64748b; --border: #1e293b; --danger: #ef4444; }
@@ -134,7 +132,7 @@ jobs:
               .fname { color:var(--text); text-decoration:none; font-weight:500; display:flex; align-items:center; gap:10px; } .fname i { color:var(--primary); }
               .del { color:var(--muted); text-decoration:none; } .del:hover { color:#ef4444; }
           </style></head><body>
-              <div class="sidebar"><div class="brand"><i class="fas fa-cloud"></i> BUGCLOUD</div>
+              <div class="sidebar"><div class="brand"><i class="fas fa-bolt"></i> BUGHOST</div>
                   <a href="#" class="nav active"><i class="fas fa-home"></i> Slot <?php echo $SITE_ID; ?></a><a href="<?php echo $site_url; ?>" target="_blank" class="nav"><i class="fas fa-globe"></i> View Site</a>
                   <a href="?logout=1" class="nav" style="margin-top:auto;color:#ef4444;"><i class="fas fa-sign-out-alt"></i> Logout</a>
               </div>
@@ -159,11 +157,16 @@ jobs:
           sed -i "s/%%USERNAME%%/$SECURE_USER/g" "$USER_DIR"/upload.php
           sed -i "s/%%SITE_ID%%/$SITE_ID/g" "$USER_DIR"/upload.php
           
+          # 🚀 ROBUST GIT PUSH (Prevents File Conflicts)
           git config user.name "System" > /dev/null 2>&1
-          git config user.email "sys@bugcloud.com" > /dev/null 2>&1
+          git config user.email "sys@bughost.com" > /dev/null 2>&1
           git add . > /dev/null 2>&1
           git diff-index --quiet HEAD || git commit -m "Updated Slot $SITE_ID for $SECURE_USER" > /dev/null 2>&1
-          git push origin main > /dev/null 2>&1
+          
+          for i in {1..10}; do
+            git pull --rebase origin main > /dev/null 2>&1 || git rebase --abort > /dev/null 2>&1
+            git push origin main > /dev/null 2>&1 && break || sleep 4
+          done
 
       - name: 2. System Routing (Stealth Tunnel)
         run: |
@@ -186,9 +189,14 @@ jobs:
           mkdir -p sessions
           echo "$URL" > "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
           
+          # 🚀 ROBUST GIT PUSH (Prevents File Conflicts)
           git add sessions/ > /dev/null 2>&1
-          git commit -m "Routing live for Slot ${{ env.SITE_ID }}" > /dev/null 2>&1
-          git push origin main > /dev/null 2>&1
+          git commit -m "Routing live for Slot ${{ env.SITE_ID }}" > /dev/null 2>&1 || true
+          
+          for i in {1..10}; do
+            git pull --rebase origin main > /dev/null 2>&1 || git rebase --abort > /dev/null 2>&1
+            git push origin main > /dev/null 2>&1 && break || sleep 4
+          done
 
       - name: 3. Core Watchdog
         run: |
