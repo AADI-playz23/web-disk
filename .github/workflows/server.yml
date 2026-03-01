@@ -1,0 +1,172 @@
+name: BugHost Stealth Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'User to host'
+        required: true
+
+concurrency:
+  group: bughost-${{ github.event.inputs.username }}
+  cancel-in-progress: true
+
+jobs:
+  host-user-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355 
+
+    steps:
+      - name: 1. Secure Storage Sync & Workspace
+        run: |
+          USERNAME="${{ github.event.inputs.username }}"
+          
+          # 🔴 Clones your PRIVATE 'webstore' repo
+          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env > /dev/null 2>&1
+          cd storage_env
+          
+          # --- THE USERS.JSON DATABASE MANAGER ---
+          if [ ! -f "users.json" ]; then echo "{}" > users.json; fi
+          if ! jq -e "has(\"$USERNAME\")" users.json > /dev/null; then
+            jq ". + {\"$USERNAME\": \"$USERNAME\"}" users.json > tmp.json && mv tmp.json users.json
+          fi
+          
+          USER_DIR="users/$USERNAME"
+          if [ ! -d "$USER_DIR" ]; then
+            mkdir -p "$USER_DIR"
+            echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#06060c;color:#fff;'><h1>🚀 Server Initialized</h1><p>Use the File Manager to upload your website.</p></body></html>" > "$USER_DIR"/index.html
+          fi
+
+          # --- INJECT SECURE FILE MANAGER ---
+          cat <<'EOF' > "$USER_DIR"/upload.php
+          <?php
+          session_start();
+          $USERNAME = "%%USERNAME%%"; 
+          
+          $db_path = __DIR__ . '/../../users.json';
+          $CORRECT_PASSWORD = $USERNAME; 
+          if (file_exists($db_path)) {
+              $db = json_decode(file_get_contents($db_path), true);
+              if (isset($db[$USERNAME])) { $CORRECT_PASSWORD = $db[$USERNAME]; }
+          }
+
+          if (isset($_POST['username']) && isset($_POST['password'])) {
+              if ($_POST['username'] === $USERNAME && $_POST['password'] === $CORRECT_PASSWORD) {
+                  $_SESSION['logged_in'] = true;
+              } else { $error = "Invalid Username or Password"; }
+          }
+          if (isset($_GET['logout'])) { session_destroy(); header("Location: upload.php"); exit; }
+          if (isset($_GET['ping'])) { file_put_contents('.heartbeat', time()); die('pong'); }
+
+          if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+              echo '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BugHost Login</title>
+              <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+              <style>
+                  body{background:#06060c;color:#fff;font-family:"Inter",sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}
+                  .login-box{background:#11111a;padding:40px;border-radius:16px;border:1px solid #1f1f2e;text-align:center;width:100%;max-width:320px;box-shadow:0 20px 40px rgba(0,0,0,0.5);}
+                  h2{margin:0 0 20px 0;background:linear-gradient(to right, #4facfe, #c471ed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+                  input{width:100%;padding:14px;background:#06060c;border:1px solid #1f1f2e;border-radius:8px;color:#fff;margin-bottom:15px;box-sizing:border-box;outline:none;}
+                  input:focus{border-color:#c471ed;}
+                  button{width:100%;padding:14px;background:#fff;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;transition:0.2s;}
+                  button:hover{background:#e2e8f0;}
+                  .err{color:#ef4444;font-size:0.85rem;margin-bottom:15px;}
+              </style></head><body>
+              <div class="login-box"><h2>File Manager</h2>
+              '.(isset($error) ? "<div class='err'>$error</div>" : "").'
+              <form method="POST"><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Secure Login</button></form>
+              </div></body></html>';
+              exit;
+          }
+
+          $host = $_SERVER['HTTP_HOST'];
+          $site_url = (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$host";
+          
+          if (isset($_FILES['file'])) { move_uploaded_file($_FILES['file']['tmp_name'], basename($_FILES['file']['name'])); header("Location: upload.php"); exit; }
+          if (isset($_GET['delete'])) { $file = basename($_GET['delete']); if($file != '.' && $file != '..' && file_exists($file)) { is_dir($file) ? rmdir($file) : unlink($file); } header("Location: upload.php"); exit; }
+          function formatSize($bytes) { if ($bytes == 0) return '-'; if ($bytes >= 1048576) return number_format($bytes/1048576, 2).' MB'; return number_format($bytes/1024, 2).' KB'; }
+          $files = array_diff(scandir('.'), array('.', '..', 'upload.php', '.heartbeat'));
+          ?>
+          <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BugHost Manager</title>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+          <style>
+              :root { --bg: #0f111a; --side: #16192b; --primary: #3b82f6; --text: #e2e8f0; --muted: #64748b; --border: #1e293b; }
+              body { margin:0; font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; overflow:hidden; }
+              .sidebar { width:240px; background:var(--side); border-right:1px solid var(--border); padding:20px; display:flex; flex-direction:column; }
+              .brand { font-size:1.2rem; font-weight:600; color:#fff; margin-bottom:30px; } .brand i { color:#f59e0b; margin-right:10px; }
+              .nav { color:var(--text); text-decoration:none; padding:12px; border-radius:8px; margin-bottom:5px; display:flex; align-items:center; gap:10px; font-size:0.9rem; }
+              .nav:hover { background:var(--border); } .nav.active { background:rgba(59,130,246,0.1); color:var(--primary); }
+              .main { flex:1; display:flex; flex-direction:column; }
+              .top { padding:20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:var(--side); }
+              .btn { padding:10px 20px; background:var(--primary); color:#fff; border:none; border-radius:6px; cursor:pointer; font-weight:600; text-decoration:none; }
+              .content { padding:30px; overflow-y:auto; flex:1; }
+              table { width:100%; border-collapse:collapse; } th { text-align:left; padding:15px; border-bottom:1px solid var(--border); color:var(--muted); font-size:0.8rem; }
+              td { padding:15px; border-bottom:1px solid var(--border); } tr:hover { background:rgba(255,255,255,0.02); }
+              .fname { color:var(--text); text-decoration:none; font-weight:500; display:flex; align-items:center; gap:10px; } .fname i { color:var(--primary); }
+              .del { color:var(--muted); text-decoration:none; } .del:hover { color:#ef4444; }
+          </style></head><body>
+              <div class="sidebar"><div class="brand"><i class="fas fa-folder"></i> File Manager</div>
+                  <a href="#" class="nav active"><i class="fas fa-home"></i> Home</a><a href="<?php echo $site_url; ?>" target="_blank" class="nav"><i class="fas fa-globe"></i> View Site</a>
+                  <a href="?logout=1" class="nav" style="margin-top:auto;color:#ef4444;"><i class="fas fa-sign-out-alt"></i> Logout</a>
+              </div>
+              <div class="main"><div class="top">
+                  <div style="color:var(--muted);font-size:0.9rem;">/public_html</div>
+                  <form method="POST" enctype="multipart/form-data" id="uf"><input type="file" name="file" id="fi" style="display:none;" onchange="document.getElementById('uf').submit()"></form>
+                  <button class="btn" onclick="document.getElementById('fi').click()"><i class="fas fa-upload"></i> Upload File</button>
+              </div><div class="content"><table>
+                  <thead><tr><th>Name</th><th>Size</th><th>Date</th><th></th></tr></thead><tbody>
+                  <?php foreach($files as $file) {
+                      $sz=formatSize(filesize($file)); $dt=date("M d H:i", filemtime($file));
+                      echo "<tr><td><a href='$file' target='_blank' class='fname'><i class='fas fa-file-code'></i> $file</a></td><td>$sz</td><td>$dt</td>
+                      <td style='text-align:right;'><a href='?delete=".urlencode($file)."' class='del'><i class='fas fa-trash'></i></a></td></tr>";
+                  } ?>
+                  </tbody></table></div></div>
+              <script>setInterval(() => fetch('upload.php?ping=1'), 15000);</script>
+          </body></html>
+          EOF
+          
+          sed -i "s/%%USERNAME%%/$USERNAME/g" "$USER_DIR"/upload.php
+          
+          git config user.name "System" > /dev/null 2>&1
+          git config user.email "sys@bughost.com" > /dev/null 2>&1
+          git add . > /dev/null 2>&1
+          git diff-index --quiet HEAD || git commit -m "Updated database & workspace for $USERNAME" > /dev/null 2>&1
+          git push origin main > /dev/null 2>&1
+
+      - name: 2. System Routing (Stealth Tunnel)
+        run: |
+          cd storage_env/users/${{ github.event.inputs.username }}
+          php -S 0.0.0.0:8080 > ../../access.log 2>&1 &
+          
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb > /dev/null 2>&1
+          sudo dpkg -i cloudflared-linux-amd64.deb > /dev/null 2>&1
+          cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          
+          MAX_RETRIES=15; COUNT=0; URL=""
+          while [ -z "$URL" ] && [ $COUNT -lt $MAX_RETRIES ]; do
+            sleep 2; URL=$(grep -o 'https://.*\.trycloudflare.com' tunnel.log | head -n 1); COUNT=$((COUNT+1))
+          done
+          if [ -z "$URL" ]; then exit 1; fi
+          
+          echo "::add-mask::$URL"
+          
+          cd ../../
+          mkdir -p sessions
+          echo "$URL" > "sessions/${{ github.event.inputs.username }}.txt"
+          
+          git add sessions/ > /dev/null 2>&1
+          git commit -m "Routing live" > /dev/null 2>&1
+          git push origin main > /dev/null 2>&1
+
+      - name: 3. Core Watchdog
+        run: |
+          cd storage_env/users/${{ github.event.inputs.username }}
+          echo $(date +%s) > .heartbeat
+          while true; do
+            if [ -f .heartbeat ]; then
+              LAST_PING=$(cat .heartbeat)
+              NOW=$(date +%s)
+              DIFF=$((NOW - LAST_PING))
+              if [ "$DIFF" -gt 60 ]; then exit 0; fi
+            fi
+            sleep 10
+          done
