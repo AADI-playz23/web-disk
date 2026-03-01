@@ -13,8 +13,6 @@ concurrency:
   group: bughost-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
   cancel-in-progress: true 
 
-# ... keep the rest of your jobs exactly the same! 
-
 jobs:
   wipe-data:
     runs-on: ubuntu-latest
@@ -27,12 +25,16 @@ jobs:
           git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env > /dev/null 2>&1
           cd storage_env
           
-          # Only remove the specific site folder and session
           rm -rf "users/$SECURE_USER/$SITE_ID"
           rm -f "sessions/${SECURE_USER}_${SITE_ID}.txt"
           
           git config user.name "System" > /dev/null 2>&1
-          git config user.email "sys@bugcloud.com" > /dev/null 2>&1
+          git config user.email "sys@bughost.com" > /dev/null 2>&1
           git add . > /dev/null 2>&1
           git diff-index --quiet HEAD || git commit -m "Deleted Slot $SITE_ID for $SECURE_USER" > /dev/null 2>&1
-          git push origin main > /dev/null 2>&1
+          
+          # 🚀 Robust push
+          for i in {1..10}; do
+            git pull --rebase origin main > /dev/null 2>&1 || git rebase --abort > /dev/null 2>&1
+            git push origin main > /dev/null 2>&1 && break || sleep 4
+          done
