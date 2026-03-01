@@ -1,0 +1,35 @@
+name: BUGCLOUD Delete Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        required: true
+      site_id:
+        required: true
+
+concurrency:
+  group: bugcloud-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
+  cancel-in-progress: true 
+
+jobs:
+  wipe-data:
+    runs-on: ubuntu-latest
+    env:
+      SECURE_USER: ${{ github.event.inputs.username }}
+      SITE_ID: ${{ github.event.inputs.site_id }}
+    steps:
+      - name: Wipe Site Data
+        run: |
+          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env > /dev/null 2>&1
+          cd storage_env
+          
+          # Only remove the specific site folder and session
+          rm -rf "users/$SECURE_USER/$SITE_ID"
+          rm -f "sessions/${SECURE_USER}_${SITE_ID}.txt"
+          
+          git config user.name "System" > /dev/null 2>&1
+          git config user.email "sys@bugcloud.com" > /dev/null 2>&1
+          git add . > /dev/null 2>&1
+          git diff-index --quiet HEAD || git commit -m "Deleted Slot $SITE_ID for $SECURE_USER" > /dev/null 2>&1
+          git push origin main > /dev/null 2>&1
