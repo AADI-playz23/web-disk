@@ -18,7 +18,7 @@ concurrency:
 jobs:
   host-user-site:
     runs-on: ubuntu-latest
-    timeout-minutes: 355 
+    timeout-minutes: 360 
     
     env:
       SECURE_USER: ${{ github.event.inputs.username }}
@@ -28,7 +28,8 @@ jobs:
     steps:
       - name: 1. Secure Storage Sync & Auth
         run: |
-          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env > /dev/null 2>&1
+          echo "▶️ Cloning Private Storage..."
+          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env
           cd storage_env
           
           # --- AUTHENTICATION & DATABASE ---
@@ -44,10 +45,10 @@ jobs:
             jq --arg u "$SECURE_USER" --arg p "$SECURE_PASS" '.[$u] = $p' users.json > tmp.json && mv tmp.json users.json
           fi
           
-          # --- WORKSPACE SETUP (Isolated Environment) ---
+          # --- WORKSPACE SETUP ---
           USER_DIR="users/$SECURE_USER/$SITE_ID"
-          if [ ! -d "$USER_DIR" ]; then
-            mkdir -p "$USER_DIR"
+          mkdir -p "$USER_DIR"
+          if [ ! -f "$USER_DIR/index.html" ]; then
             echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#06060c;color:#fff;'><h1>🚀 Server $SITE_ID Initialized</h1><p>Use the File Manager to upload your website.</p></body></html>" > "$USER_DIR"/index.html
           fi
 
@@ -71,7 +72,6 @@ jobs:
               } else { $error = "Invalid Username or Password"; }
           }
           if (isset($_GET['logout'])) { session_destroy(); header("Location: upload.php"); exit; }
-          if (isset($_GET['ping'])) { file_put_contents('.heartbeat', time()); die('pong'); }
 
           if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
               echo '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BUGHOST Login</title>
@@ -111,7 +111,8 @@ jobs:
           
           if (isset($_GET['delete'])) { $file = basename($_GET['delete']); if($file != '.' && $file != '..' && file_exists($file)) { is_dir($file) ? rmdir($file) : unlink($file); } header("Location: upload.php"); exit; }
           function formatSize($bytes) { if ($bytes == 0) return '-'; if ($bytes >= 1048576) return number_format($bytes/1048576, 2).' MB'; return number_format($bytes/1024, 2).' KB'; }
-          $files = array_diff(scandir('.'), array('.', '..', 'upload.php', '.heartbeat'));
+          
+          $files = array_diff(scandir('.'), array('.', '..', 'upload.php'));
           ?>
           <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BUGHOST Manager</title>
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
@@ -150,30 +151,41 @@ jobs:
                       <td style='text-align:right;'><a href='?delete=".urlencode($file)."' class='del'><i class='fas fa-trash'></i></a></td></tr>";
                   } ?>
                   </tbody></table></div></div>
-              <script>setInterval(() => fetch('upload.php?ping=1'), 15000);</script>
           </body></html>
           EOF
           
           sed -i "s/%%USERNAME%%/$SECURE_USER/g" "$USER_DIR"/upload.php
           sed -i "s/%%SITE_ID%%/$SITE_ID/g" "$USER_DIR"/upload.php
           
-          # 🚀 ROBUST GIT PUSH (Prevents File Conflicts)
-          git config user.name "System" > /dev/null 2>&1
-          git config user.email "sys@bughost.com" > /dev/null 2>&1
-          git add . > /dev/null 2>&1
-          git diff-index --quiet HEAD || git commit -m "Updated Slot $SITE_ID for $SECURE_USER" > /dev/null 2>&1
+          echo "▶️ Committing Files..."
+          git config user.name "System"
+          git config user.email "sys@bughost.com"
+          git add .
           
-          for i in {1..10}; do
-            git pull --rebase origin main > /dev/null 2>&1 || git rebase --abort > /dev/null 2>&1
-            git push origin main > /dev/null 2>&1 && break || sleep 4
-          done
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Updated Slot $SITE_ID for $SECURE_USER"
+            for i in {1..5}; do
+              echo "🔄 Pushing to WebStore (Attempt $i)..."
+              git pull --rebase origin main || git rebase --abort
+              if git push origin main; then
+                echo "✅ Success!"
+                break
+              else
+                echo "❌ Push Failed. Retrying in 4 seconds..."
+                sleep 4
+              fi
+            done
+          else
+            echo "⚡ No file changes detected."
+          fi
 
       - name: 2. System Routing (Stealth Tunnel)
         run: |
           cd storage_env/users/${{ env.SECURE_USER }}/${{ env.SITE_ID }}
           php -S 0.0.0.0:8080 > ../../../access.log 2>&1 &
           
-          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb > /dev/null 2>&1
+          echo "▶️ Installing Tunnel..."
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb > /dev/null 2>&1
           cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
           
@@ -181,7 +193,10 @@ jobs:
           while [ -z "$URL" ] && [ $COUNT -lt $MAX_RETRIES ]; do
             sleep 2; URL=$(grep -o 'https://.*\.trycloudflare.com' tunnel.log | head -n 1); COUNT=$((COUNT+1))
           done
-          if [ -z "$URL" ]; then exit 1; fi
+          if [ -z "$URL" ]; then 
+            echo "❌ Cloudflare tunnel failed to start."
+            exit 1 
+          fi
           
           echo "::add-mask::$URL"
           
@@ -189,25 +204,41 @@ jobs:
           mkdir -p sessions
           echo "$URL" > "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
           
-          # 🚀 ROBUST GIT PUSH (Prevents File Conflicts)
-          git add sessions/ > /dev/null 2>&1
-          git commit -m "Routing live for Slot ${{ env.SITE_ID }}" > /dev/null 2>&1 || true
+          echo "▶️ Pushing Link..."
+          git add sessions/
           
-          for i in {1..10}; do
-            git pull --rebase origin main > /dev/null 2>&1 || git rebase --abort > /dev/null 2>&1
-            git push origin main > /dev/null 2>&1 && break || sleep 4
-          done
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Routing live for Slot ${{ env.SITE_ID }}"
+            for i in {1..5}; do
+              echo "🔄 Pushing Link to WebStore (Attempt $i)..."
+              git pull --rebase origin main || git rebase --abort
+              if git push origin main; then
+                echo "✅ Success!"
+                break
+              else
+                echo "❌ Push Failed. Retrying in 4 seconds..."
+                sleep 4
+              fi
+            done
+          fi
 
-      - name: 3. Core Watchdog
+      - name: 3. Engine Keep-Alive (6 Hours)
         run: |
-          cd storage_env/users/${{ env.SECURE_USER }}/${{ env.SITE_ID }}
-          echo $(date +%s) > .heartbeat
-          while true; do
-            if [ -f .heartbeat ]; then
-              LAST_PING=$(cat .heartbeat)
-              NOW=$(date +%s)
-              DIFF=$((NOW - LAST_PING))
-              if [ "$DIFF" -gt 60 ]; then exit 0; fi
-            fi
-            sleep 10
-          done
+          echo "✅ Server is live! Unrestricted 6-hour mode engaged."
+          sleep 21300 
+          
+          echo "⏳ Time limit reached. Shutting down cleanly..."
+          cd storage_env
+          rm -f "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
+          
+          git config user.name "System"
+          git config user.email "sys@bughost.com"
+          git add sessions/
+          
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Auto-Shutdown Slot ${{ env.SITE_ID }}"
+            for i in {1..5}; do
+              git pull --rebase origin main || git rebase --abort
+              git push origin main && break || sleep 4
+            done
+          fi
