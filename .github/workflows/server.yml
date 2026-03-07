@@ -1,4 +1,4 @@
-name: BugHost Stealth Engine
+name: Absora Engine
 run-name: 🚀 Deploy Slot ${{ inputs.site_id }} for ${{ inputs.username }}
 
 on:
@@ -12,7 +12,7 @@ on:
         required: true
 
 concurrency:
-  group: bughost-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
+  group: absora-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
   cancel-in-progress: true
 
 jobs:
@@ -26,30 +26,49 @@ jobs:
       SITE_ID: ${{ github.event.inputs.site_id }}
 
     steps:
-      - name: 1. Secure Storage Sync & Auth
+      - name: 1. Core Database & Plan Verification
         run: |
           echo "▶️ Cloning Private Storage..."
           git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env
           cd storage_env
           
-          # --- AUTHENTICATION & DATABASE ---
           if [ ! -f "users.json" ]; then echo "{}" > users.json; fi
           
+          # --- ADVANCED ACCOUNT AUTHENTICATION ---
           if jq -e "has(\"$SECURE_USER\")" users.json > /dev/null; then
-            STORED_PASS=$(jq -r ".\"$SECURE_USER\"" users.json)
+            # Existing User: Check Password
+            STORED_PASS=$(jq -r ".\"$SECURE_USER\".password" users.json)
             if [ "$STORED_PASS" != "$SECURE_PASS" ]; then
               echo "❌ AUTH FAILED: Incorrect password for $SECURE_USER"
               exit 1
             fi
+            # Fetch User's Plan
+            PLAN=$(jq -r ".\"$SECURE_USER\".plan" users.json)
           else
-            jq --arg u "$SECURE_USER" --arg p "$SECURE_PASS" '.[$u] = $p' users.json > tmp.json && mv tmp.json users.json
+            # New User: Auto-register to 'starter' plan
+            PLAN="starter"
+            jq --arg u "$SECURE_USER" --arg p "$SECURE_PASS" --arg pl "$PLAN" '.[$u] = {"password": $p, "plan": $pl}' users.json > tmp.json && mv tmp.json users.json
           fi
           
+          echo "👤 User: $SECURE_USER | 🎟️ Active Plan: $PLAN"
+          echo "ACTIVE_PLAN=$PLAN" >> $GITHUB_ENV
+          
+          # --- PLAN SLOT ENFORCEMENT ---
+          MAX_SLOTS=1
+          if [ "$PLAN" == "developer" ]; then MAX_SLOTS=2; fi
+          if [ "$PLAN" == "professional" ]; then MAX_SLOTS=5; fi
+          if [ "$PLAN" == "studio" ]; then MAX_SLOTS=10; fi
+          
+          if [ "$SITE_ID" -gt "$MAX_SLOTS" ]; then
+            echo "❌ UPGRADE REQUIRED: The $PLAN plan only supports up to $MAX_SLOTS slots. Tried to access Slot $SITE_ID."
+            exit 1
+          fi
+
           # --- WORKSPACE SETUP ---
           USER_DIR="users/$SECURE_USER/$SITE_ID"
           mkdir -p "$USER_DIR"
           if [ ! -f "$USER_DIR/index.html" ]; then
-            echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#06060c;color:#fff;'><h1>🚀 Server $SITE_ID Initialized</h1><p>Use the File Manager to upload your website.</p></body></html>" > "$USER_DIR"/index.html
+            echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#030712;color:#fff;'><h1>🚀 Absora Instance $SITE_ID Live</h1><p>Use the File Manager to upload your application.</p></body></html>" > "$USER_DIR"/index.html
           fi
 
           # --- INJECT SECURE FILE MANAGER ---
@@ -63,32 +82,32 @@ jobs:
           $CORRECT_PASSWORD = $USERNAME; 
           if (file_exists($db_path)) {
               $db = json_decode(file_get_contents($db_path), true);
-              if (isset($db[$USERNAME])) { $CORRECT_PASSWORD = $db[$USERNAME]; }
+              if (isset($db[$USERNAME])) { $CORRECT_PASSWORD = $db[$USERNAME]['password']; }
           }
 
           if (isset($_POST['username']) && isset($_POST['password'])) {
               if ($_POST['username'] === $USERNAME && $_POST['password'] === $CORRECT_PASSWORD) {
                   $_SESSION['logged_in'] = true;
-              } else { $error = "Invalid Username or Password"; }
+              } else { $error = "Invalid Credentials"; }
           }
           if (isset($_GET['logout'])) { session_destroy(); header("Location: upload.php"); exit; }
 
           if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
-              echo '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BUGHOST Login</title>
-              <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+              echo '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Absora Vault</title>
+              <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
               <style>
-                  body{background:#06060c;color:#fff;font-family:"Inter",sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}
-                  .login-box{background:#11111a;padding:40px;border-radius:16px;border:1px solid #1f1f2e;text-align:center;width:100%;max-width:320px;box-shadow:0 20px 40px rgba(0,0,0,0.5);}
-                  h2{margin:0 0 5px 0;background:linear-gradient(to right, #4facfe, #c471ed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-                  input{width:100%;padding:14px;background:#06060c;border:1px solid #1f1f2e;border-radius:8px;color:#fff;margin-bottom:15px;box-sizing:border-box;outline:none;}
-                  input:focus{border-color:#c471ed;}
-                  button{width:100%;padding:14px;background:#fff;color:#000;border:none;border-radius:8px;font-weight:bold;cursor:pointer;transition:0.2s;}
-                  button:hover{background:#e2e8f0;}
+                  body{background:#030712;color:#fff;font-family:"Plus Jakarta Sans",sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}
+                  .login-box{background:#111827;padding:40px;border-radius:24px;border:1px solid #1f2937;text-align:center;width:100%;max-width:320px;box-shadow:0 20px 40px rgba(0,0,0,0.5);}
+                  h2{margin:0 0 5px 0;background:linear-gradient(to right, #3b82f6, #c471ed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+                  input{width:100%;padding:14px;background:#030712;border:1px solid #1f2937;border-radius:12px;color:#fff;margin-bottom:15px;box-sizing:border-box;outline:none;}
+                  input:focus{border-color:#3b82f6;}
+                  button{width:100%;padding:14px;background:#3b82f6;color:#fff;border:none;border-radius:12px;font-weight:bold;cursor:pointer;transition:0.2s;}
+                  button:hover{background:#1d4ed8;}
                   .err{color:#ef4444;font-size:0.85rem;margin-bottom:15px;}
               </style></head><body>
-              <div class="login-box"><h2>File Manager</h2><p style="color:#8a8f98;font-size:0.8rem;margin-bottom:20px;">Project Slot '.$SITE_ID.'</p>
+              <div class="login-box"><h2>File Manager</h2><p style="color:#9ca3af;font-size:0.8rem;margin-bottom:20px;">Instance Slot '.$SITE_ID.'</p>
               '.(isset($error) ? "<div class='err'>$error</div>" : "").'
-              <form method="POST"><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Secure Login</button></form>
+              <form method="POST"><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Unlock Instance</button></form>
               </div></body></html>';
               exit;
           }
@@ -100,42 +119,37 @@ jobs:
               $fname = basename($_FILES['file']['name']);
               $ext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
               $blocked = ['php', 'phtml', 'php3', 'php4', 'php5', 'sh', 'bash', 'py', 'cgi', 'htaccess'];
-              
-              if(in_array($ext, $blocked)) {
-                  $upload_error = "Security Block: Executable files are not permitted.";
-              } else {
-                  move_uploaded_file($_FILES['file']['tmp_name'], $fname); 
-                  header("Location: upload.php"); exit; 
-              }
+              if(in_array($ext, $blocked)) { $upload_error = "Security Block: Executables prohibited."; } 
+              else { move_uploaded_file($_FILES['file']['tmp_name'], $fname); header("Location: upload.php"); exit; }
           }
           
           if (isset($_GET['delete'])) { $file = basename($_GET['delete']); if($file != '.' && $file != '..' && file_exists($file)) { is_dir($file) ? rmdir($file) : unlink($file); } header("Location: upload.php"); exit; }
           function formatSize($bytes) { if ($bytes == 0) return '-'; if ($bytes >= 1048576) return number_format($bytes/1048576, 2).' MB'; return number_format($bytes/1024, 2).' KB'; }
-          
           $files = array_diff(scandir('.'), array('.', '..', 'upload.php'));
           ?>
-          <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BUGHOST Manager</title>
-          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+          <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Absora Manager</title>
+          <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet"><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
           <style>
-              :root { --bg: #0f111a; --side: #16192b; --primary: #3b82f6; --text: #e2e8f0; --muted: #64748b; --border: #1e293b; --danger: #ef4444; }
-              body { margin:0; font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; overflow:hidden; }
+              :root { --bg: #030712; --side: #0f172a; --primary: #3b82f6; --text: #f9fafb; --muted: #9ca3af; --border: #1f2937; --danger: #ef4444; }
+              body { margin:0; font-family:'Plus Jakarta Sans',sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; overflow:hidden; }
               .sidebar { width:240px; background:var(--side); border-right:1px solid var(--border); padding:20px; display:flex; flex-direction:column; }
-              .brand { font-size:1.2rem; font-weight:600; color:#fff; margin-bottom:30px; } .brand i { color:#f59e0b; margin-right:10px; }
-              .nav { color:var(--text); text-decoration:none; padding:12px; border-radius:8px; margin-bottom:5px; display:flex; align-items:center; gap:10px; font-size:0.9rem; }
+              .brand { font-size:1.2rem; font-weight:800; color:#fff; margin-bottom:30px; letter-spacing:-0.5px; } .brand i { color:var(--primary); margin-right:10px; }
+              .nav { color:var(--text); text-decoration:none; padding:12px; border-radius:10px; margin-bottom:5px; display:flex; align-items:center; gap:10px; font-size:0.9rem; transition:0.2s;}
               .nav:hover { background:var(--border); } .nav.active { background:rgba(59,130,246,0.1); color:var(--primary); }
               .main { flex:1; display:flex; flex-direction:column; }
               .top { padding:20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:var(--side); }
-              .btn { padding:10px 20px; background:var(--primary); color:#fff; border:none; border-radius:6px; cursor:pointer; font-weight:600; text-decoration:none; }
+              .btn { padding:10px 20px; background:var(--primary); color:#fff; border:none; border-radius:10px; cursor:pointer; font-weight:600; text-decoration:none; transition:0.2s; }
+              .btn:hover { background: #1d4ed8; }
               .content { padding:30px; overflow-y:auto; flex:1; }
-              .err-box { background: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger); color: var(--danger); padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-              table { width:100%; border-collapse:collapse; } th { text-align:left; padding:15px; border-bottom:1px solid var(--border); color:var(--muted); font-size:0.8rem; }
+              .err-box { background: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger); color: var(--danger); padding: 15px; border-radius: 12px; margin-bottom: 20px; }
+              table { width:100%; border-collapse:collapse; } th { text-align:left; padding:15px; border-bottom:1px solid var(--border); color:var(--muted); font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;}
               td { padding:15px; border-bottom:1px solid var(--border); } tr:hover { background:rgba(255,255,255,0.02); }
               .fname { color:var(--text); text-decoration:none; font-weight:500; display:flex; align-items:center; gap:10px; } .fname i { color:var(--primary); }
-              .del { color:var(--muted); text-decoration:none; } .del:hover { color:#ef4444; }
+              .del { color:var(--muted); text-decoration:none; transition:0.2s;} .del:hover { color:#ef4444; }
           </style></head><body>
-              <div class="sidebar"><div class="brand"><i class="fas fa-bolt"></i> BUGHOST</div>
+              <div class="sidebar"><div class="brand"><i class="fas fa-rocket"></i> ABSORA</div>
                   <a href="#" class="nav active"><i class="fas fa-home"></i> Slot <?php echo $SITE_ID; ?></a><a href="<?php echo $site_url; ?>" target="_blank" class="nav"><i class="fas fa-globe"></i> View Site</a>
-                  <a href="?logout=1" class="nav" style="margin-top:auto;color:#ef4444;"><i class="fas fa-sign-out-alt"></i> Logout</a>
+                  <a href="?logout=1" class="nav" style="margin-top:auto;color:#ef4444;"><i class="fas fa-sign-out-alt"></i> Secure Logout</a>
               </div>
               <div class="main"><div class="top">
                   <div style="color:var(--muted);font-size:0.9rem;">/public_html</div>
@@ -159,32 +173,22 @@ jobs:
           
           echo "▶️ Committing Files..."
           git config user.name "System"
-          git config user.email "sys@bughost.com"
+          git config user.email "sys@absora.com"
           git add .
           
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "Updated Slot $SITE_ID for $SECURE_USER"
+            git commit -m "Updated Slot $SITE_ID for $SECURE_USER ($PLAN tier)"
             for i in {1..5}; do
-              echo "🔄 Pushing to WebStore (Attempt $i)..."
               git pull --rebase origin main || git rebase --abort
-              if git push origin main; then
-                echo "✅ Success!"
-                break
-              else
-                echo "❌ Push Failed. Retrying in 4 seconds..."
-                sleep 4
-              fi
+              git push origin main && break || sleep 4
             done
-          else
-            echo "⚡ No file changes detected."
           fi
 
-      - name: 2. System Routing (Stealth Tunnel)
+      - name: 2. Network Routing
         run: |
           cd storage_env/users/${{ env.SECURE_USER }}/${{ env.SITE_ID }}
           php -S 0.0.0.0:8080 > ../../../access.log 2>&1 &
           
-          echo "▶️ Installing Tunnel..."
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb > /dev/null 2>&1
           cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
@@ -193,52 +197,46 @@ jobs:
           while [ -z "$URL" ] && [ $COUNT -lt $MAX_RETRIES ]; do
             sleep 2; URL=$(grep -o 'https://.*\.trycloudflare.com' tunnel.log | head -n 1); COUNT=$((COUNT+1))
           done
-          if [ -z "$URL" ]; then 
-            echo "❌ Cloudflare tunnel failed to start."
-            exit 1 
-          fi
-          
-          echo "::add-mask::$URL"
+          if [ -z "$URL" ]; then exit 1; fi
           
           cd ../../../
           mkdir -p sessions
           echo "$URL" > "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
           
-          echo "▶️ Pushing Link..."
           git add sessions/
-          
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "Routing live for Slot ${{ env.SITE_ID }}"
-            for i in {1..5}; do
-              echo "🔄 Pushing Link to WebStore (Attempt $i)..."
-              git pull --rebase origin main || git rebase --abort
-              if git push origin main; then
-                echo "✅ Success!"
-                break
-              else
-                echo "❌ Push Failed. Retrying in 4 seconds..."
-                sleep 4
-              fi
-            done
-          fi
-
-      - name: 3. Engine Keep-Alive (6 Hours)
-        run: |
-          echo "✅ Server is live! Unrestricted 6-hour mode engaged."
-          sleep 21300 
-          
-          echo "⏳ Time limit reached. Shutting down cleanly..."
-          cd storage_env
-          rm -f "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
-          
-          git config user.name "System"
-          git config user.email "sys@bughost.com"
-          git add sessions/
-          
-          if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "Auto-Shutdown Slot ${{ env.SITE_ID }}"
             for i in {1..5}; do
               git pull --rebase origin main || git rebase --abort
               git push origin main && break || sleep 4
             done
+          fi
+
+      - name: 3. Smart Keep-Alive (Plan Based)
+        run: |
+          if [ "${{ env.ACTIVE_PLAN }}" == "starter" ]; then
+            echo "⏱️ Starter Plan Detected. Enforcing 6-hour limit."
+            sleep 21300 
+            
+            echo "⏳ Time limit reached. Shutting down cleanly..."
+            cd storage_env
+            rm -f "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
+            
+            git config user.name "System"
+            git config user.email "sys@absora.com"
+            git add sessions/
+            
+            if [ -n "$(git status --porcelain)" ]; then
+              git commit -m "Auto-Shutdown Slot ${{ env.SITE_ID }} (Starter Tier)"
+              for i in {1..5}; do
+                git pull --rebase origin main || git rebase --abort
+                git push origin main && break || sleep 4
+              done
+            fi
+          else
+            echo "🚀 Premium Plan Detected (${{ env.ACTIVE_PLAN }}). Persistent mode engaged."
+            # GitHub Actions still physically kills jobs at 6 hours, 
+            # but we won't delete the session file, allowing easy instant-resume.
+            sleep 21500
+            echo "GitHub workflow max time reached. Tunnel requires quick ping to resume."
           fi
