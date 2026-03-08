@@ -1,0 +1,25 @@
+name: Absora Plan Upgrader
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        required: true
+      plan:
+        required: true
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync Database
+        run: |
+          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage
+          cd storage
+          # Directly update the JSON plan field for the user
+          jq --arg u "${{ inputs.username }}" --arg p "${{ inputs.plan }}" '.[$u].plan = $p' users.json > tmp.json && mv tmp.json users.json
+          
+          git config user.name "Absora-System"
+          git config user.email "sys@absora.com"
+          git add users.json
+          git commit -m "Auto-Upgrade: ${{ inputs.username }} to ${{ inputs.plan }}"
+          git push origin main
