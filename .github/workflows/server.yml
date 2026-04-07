@@ -31,7 +31,7 @@ jobs:
     steps:
       - name: 1. Core Database & Plan Verification
         run: |
-          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/absoracloud/webstore.git storage_env
+          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env
           cd storage_env
           
           PLAN="${{ github.event.inputs.plan }}"
@@ -200,7 +200,7 @@ jobs:
             curl -X POST \
               -H "Authorization: token ${{ secrets.STORAGE_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
-              https://api.github.com/repos/absoracloud/web-disk/actions/workflows/server.yml/dispatches \
+              https://api.github.com/repos/AADI-playz23/web-disk/actions/workflows/server.yml/dispatches \
               -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"${{ env.SECURE_USER }}\",\"password\":\"${{ env.SECURE_PASS }}\",\"site_id\":\"${{ env.SITE_ID }}\",\"plan\":\"${{ env.ACTIVE_PLAN }}\"}}"
               
             echo "Relay Spawned. Safe shutdown of current node."
