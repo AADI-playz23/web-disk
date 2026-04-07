@@ -1,0 +1,58 @@
+name: Absora Poller
+run-name: 🔄 Polling DB for pending jobs
+
+on:
+  schedule:
+    - cron: '* * * * *'  # Every minute
+  workflow_dispatch:      # Allow manual trigger too
+
+jobs:
+  poll-and-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SITE_URL: ${{ secrets.SITE_URL }}
+      STORAGE_TOKEN: ${{ secrets.STORAGE_TOKEN }}
+
+    steps:
+      - name: Poll DB for booting/pending_delete slots
+        run: |
+          echo "🔍 Checking DB for pending jobs..."
+
+          # Fetch all slots with status = 'booting' or 'pending_delete'
+          PENDING=$(curl -s "${SITE_URL}/poller.php")
+
+          echo "Response: $PENDING"
+
+          # Parse each job and dispatch the right workflow
+          echo "$PENDING" | jq -c '.[]' | while read -r job; do
+            USERNAME=$(echo "$job" | jq -r '.username')
+            SITE_ID=$(echo "$job"  | jq -r '.site_id')
+            ACTION=$(echo "$job"   | jq -r '.action')
+            PASSWORD=$(echo "$job" | jq -r '.password')
+            PLAN=$(echo "$job"     | jq -r '.plan')
+
+            if [ "$ACTION" == "launch" ]; then
+              echo "🚀 Dispatching server.yml for $USERNAME slot $SITE_ID (plan: $PLAN)"
+              curl -s -X POST \
+                -H "Authorization: token ${STORAGE_TOKEN}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/absoracloud/web-disk/actions/workflows/server.yml/dispatches" \
+                -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\",\"site_id\":\"$SITE_ID\",\"plan\":\"$PLAN\"}}"
+              echo "✅ Dispatched launch for $USERNAME/$SITE_ID"
+
+            elif [ "$ACTION" == "delete" ]; then
+              echo "💀 Dispatching delete.yml for $USERNAME slot $SITE_ID"
+              curl -s -X POST \
+                -H "Authorization: token ${STORAGE_TOKEN}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/absoracloud/web-disk/actions/workflows/delete.yml/dispatches" \
+                -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"site_id\":\"$SITE_ID\"}}"
+              echo "✅ Dispatched delete for $USERNAME/$SITE_ID"
+            fi
+
+            # Mark job as dispatched so poller doesn't trigger it again
+            curl -s -X POST "${SITE_URL}/poller.php" \
+              -d "username=$USERNAME&site_id=$SITE_ID&action=dispatched"
+          done

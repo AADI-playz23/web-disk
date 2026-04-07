@@ -1,4 +1,6 @@
-name: Absora Plan Upgrader
+name: Sync User Upgrade Details
+run-name: 💎 Upgrade Plan for ${{ inputs.username }} to ${{ inputs.plan }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,19 +9,16 @@ on:
       plan:
         required: true
 
+concurrency:
+  group: absora-upgrade-${{ github.event.inputs.username }}
+  cancel-in-progress: true
+
 jobs:
-  upgrade:
+  upgrade-plan:
     runs-on: ubuntu-latest
     steps:
-      - name: Sync Database
+      - name: Acknowledge Upgrade
         run: |
-          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage
-          cd storage
-          # Directly update the JSON plan field for the user
-          jq --arg u "${{ inputs.username }}" --arg p "${{ inputs.plan }}" '.[$u].plan = $p' users.json > tmp.json && mv tmp.json users.json
-          
-          git config user.name "Absora-System"
-          git config user.email "sys@absora.com"
-          git add users.json
-          git commit -m "Auto-Upgrade: ${{ inputs.username }} to ${{ inputs.plan }}"
-          git push origin main
+          echo "✅ Upgrade processed for ${{ inputs.username }} to ${{ inputs.plan }}"
+          echo "Note: Plan is now strictly managed in InfinityFree MySQL Database."
+          echo "This workflow is kept as a notification stub and no longer modifies users.json."

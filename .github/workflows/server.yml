@@ -8,6 +8,8 @@ on:
         required: true
       password:
         required: true
+      plan:
+        required: true
       site_id:
         required: true
 
@@ -24,24 +26,15 @@ jobs:
       SECURE_USER: ${{ github.event.inputs.username }}
       SECURE_PASS: ${{ github.event.inputs.password }}
       SITE_ID: ${{ github.event.inputs.site_id }}
+      SITE_URL: ${{ secrets.SITE_URL }}
 
     steps:
       - name: 1. Core Database & Plan Verification
         run: |
-          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env
+          git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/absoracloud/webstore.git storage_env
           cd storage_env
           
-          if [ ! -f "users.json" ]; then echo "{}" > users.json; fi
-          
-          if jq -e "has(\"$SECURE_USER\")" users.json > /dev/null; then
-            STORED_PASS=$(jq -r ".\"$SECURE_USER\".password" users.json)
-            if [ "$STORED_PASS" != "$SECURE_PASS" ]; then exit 1; fi
-            PLAN=$(jq -r ".\"$SECURE_USER\".plan" users.json)
-          else
-            PLAN="starter"
-            jq --arg u "$SECURE_USER" --arg p "$SECURE_PASS" --arg pl "$PLAN" '.[$u] = {"password": $p, "plan": $pl}' users.json > tmp.json && mv tmp.json users.json
-          fi
-          
+          PLAN="${{ github.event.inputs.plan }}"
           echo "ACTIVE_PLAN=$PLAN" >> $GITHUB_ENV
           
           MAX_SLOTS=1
@@ -65,7 +58,7 @@ jobs:
           $SITE_ID = "%%SITE_ID%%";
           $PLAN = "%%PLAN%%";
           
-          // 🛑 FEATURE ENFORCEMENT: Storage Quotas
+          // 🛡 FEATURE ENFORCEMENT: Storage Quotas
           $max_bytes = 500 * 1024 * 1024; // Starter: 500MB
           if ($PLAN === 'developer') $max_bytes = 50 * 1024 * 1024 * 1024; // 50GB
           if ($PLAN === 'professional') $max_bytes = 200 * 1024 * 1024 * 1024; // 200GB
@@ -79,12 +72,7 @@ jobs:
               return $size;
           }
 
-          $db_path = __DIR__ . '/../../../users.json';
-          $CORRECT_PASSWORD = $USERNAME; 
-          if (file_exists($db_path)) {
-              $db = json_decode(file_get_contents($db_path), true);
-              if (isset($db[$USERNAME])) { $CORRECT_PASSWORD = $db[$USERNAME]['password']; }
-          }
+          $CORRECT_PASSWORD = "%%PASSWORD%%"; 
 
           if (isset($_POST['username']) && isset($_POST['password'])) {
               if ($_POST['username'] === $USERNAME && $_POST['password'] === $CORRECT_PASSWORD) $_SESSION['logged_in'] = true;
@@ -137,6 +125,7 @@ jobs:
           sed -i "s/%%USERNAME%%/$SECURE_USER/g" "$USER_DIR"/upload.php
           sed -i "s/%%SITE_ID%%/$SITE_ID/g" "$USER_DIR"/upload.php
           sed -i "s/%%PLAN%%/$PLAN/g" "$USER_DIR"/upload.php
+          sed -i "s/%%PASSWORD%%/$SECURE_PASS/g" "$USER_DIR"/upload.php
           
           git config user.name "System"
           git config user.email "sys@absora.com"
@@ -144,7 +133,7 @@ jobs:
           git diff-index --quiet HEAD || git commit -m "Updated Slot $SITE_ID for $SECURE_USER ($PLAN tier)"
           for i in {1..5}; do git pull --rebase origin main || git rebase --abort; git push origin main && break || sleep 4; done
 
-      - name: 2. Network Routing & Custom Domains
+      - name: 2. Network Routing
         run: |
           cd storage_env/users/${{ env.SECURE_USER }}/${{ env.SITE_ID }}
           php -S 0.0.0.0:8080 > ../../../access.log 2>&1 &
@@ -152,13 +141,11 @@ jobs:
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb > /dev/null 2>&1
           
-          # 🛑 FEATURE ENFORCEMENT: Custom Domain Linking (Studio)
+          # 🛡 FEATURE ENFORCEMENT: Custom Domain Linking (Studio)
           if [ "${{ env.ACTIVE_PLAN }}" == "studio" ] && [ -f "cf_token.txt" ]; then
             CF_TOKEN=$(cat cf_token.txt)
             echo "💎 Studio Plan: Linking Dedicated Custom Domain..."
             cloudflared tunnel run --token $CF_TOKEN > tunnel.log 2>&1 &
-            # For custom domains, the URL is predefined by the user in Cloudflare, 
-            # so we just mark it active.
             URL="https://custom-domain-active"
           else
             cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
@@ -172,12 +159,18 @@ jobs:
           
           cd ../../../
           mkdir -p sessions
+          mkdir -p status
           echo "$URL" > "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
           
           git add sessions/
           git diff-index --quiet HEAD || git commit -m "Routing live for Slot ${{ env.SITE_ID }}"
           for i in {1..5}; do git pull --rebase origin main || git rebase --abort; git push origin main && break || sleep 4; done
 
+          # ✅ Write status to git repo (no callback.php needed)
+          echo "{\"status\":\"live\",\"url\":\"${URL}\"}" > "status/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.json"
+          git add status/
+          git diff-index --quiet HEAD || git commit -m "Status: live for ${{ env.SECURE_USER }} slot ${{ env.SITE_ID }}"
+          for i in {1..5}; do git pull --rebase origin main || git rebase --abort; git push origin main && break || sleep 4; done
       - name: 3. Smart Keep-Alive & 24/7 Uptime
         run: |
           if [ "${{ env.ACTIVE_PLAN }}" == "starter" ]; then
@@ -191,18 +184,39 @@ jobs:
             git add sessions/
             git diff-index --quiet HEAD || git commit -m "Auto-Shutdown Slot ${{ env.SITE_ID }}"
             for i in {1..5}; do git pull --rebase origin main || git rebase --abort; git push origin main && break || sleep 4; done
+
+            # ✅ Write offline status to git repo
+            echo "{\"status\":\"offline\",\"url\":\"\"}" > "status/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.json"
+            git add status/
+            git diff-index --quiet HEAD || git commit -m "Status: offline for ${{ env.SECURE_USER }} slot ${{ env.SITE_ID }}"
+            for i in {1..5}; do git pull --rebase origin main || git rebase --abort; git push origin main && break || sleep 4; done
             
-          else
-            echo "🚀 Premium Plan (${{ env.ACTIVE_PLAN }}). Engaging 24/7 Auto-Restarter."
-            # Sleep for 5 hours and 50 minutes
+          elif [ "${{ env.ACTIVE_PLAN }}" == "developer" ] || [ "${{ env.ACTIVE_PLAN }}" == "professional" ] || [ "${{ env.ACTIVE_PLAN }}" == "studio" ]; then
+            echo "🚀 ${{ env.ACTIVE_PLAN }} Plan. Engaging 24/7 Auto-Restarter."
+            # Sleep for 5 hours and 50 minutes then relay
             sleep 21000
             
-            echo "🔄 6-Hour Node limit reaching. Spawning relay engine to maintain 24/7 uptime..."
+            echo "🔔 6-Hour limit approaching. Spawning relay to maintain 24/7 uptime..."
             curl -X POST \
               -H "Authorization: token ${{ secrets.STORAGE_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
-              https://api.github.com/repos/AADI-playz23/web-disk/actions/workflows/server.yml/dispatches \
-              -d '{"ref":"main","inputs":{"username":"${{ env.SECURE_USER }}","password":"${{ env.SECURE_PASS }}","site_id":"${{ env.SITE_ID }}"}}'
+              https://api.github.com/repos/absoracloud/web-disk/actions/workflows/server.yml/dispatches \
+              -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"${{ env.SECURE_USER }}\",\"password\":\"${{ env.SECURE_PASS }}\",\"site_id\":\"${{ env.SITE_ID }}\",\"plan\":\"${{ env.ACTIVE_PLAN }}\"}}"
               
             echo "Relay Spawned. Safe shutdown of current node."
+          else
+            echo "⏱️ Plan ${{ env.ACTIVE_PLAN }} does not include 24/7 uptime. Shutting down after 6 hours."
+            sleep 21300
+            cd storage_env
+            rm -f "sessions/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.txt"
+            git config user.name "System"
+            git config user.email "sys@absora.com"
+            git add sessions/
+            git diff-index --quiet HEAD || git commit -m "Auto-Shutdown Slot ${{ env.SITE_ID }}"
+            for i in {1..5}; do git pull --rebase origin main || git rebase --abort; git push origin main && break || sleep 4; done
+            # ✅ Write offline status to git repo
+            echo "{\"status\":\"offline\",\"url\":\"\"}" > "status/${{ env.SECURE_USER }}_${{ env.SITE_ID }}.json"
+            git add status/
+            git diff-index --quiet HEAD || git commit -m "Status: offline for ${{ env.SECURE_USER }} slot ${{ env.SITE_ID }}"
+            for i in {1..5}; do git pull --rebase origin main || git rebase --abort; git push origin main && break || sleep 4; done
           fi
