@@ -38,7 +38,7 @@ jobs:
               curl -s -X POST \
                 -H "Authorization: token ${STORAGE_TOKEN}" \
                 -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/absoracloud/web-disk/actions/workflows/server.yml/dispatches" \
+                "https://api.github.com/repos/AADI-playz23/web-disk/actions/workflows/server.yml/dispatches" \
                 -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\",\"site_id\":\"$SITE_ID\",\"plan\":\"$PLAN\"}}"
               echo "✅ Dispatched launch for $USERNAME/$SITE_ID"
 
@@ -47,7 +47,7 @@ jobs:
               curl -s -X POST \
                 -H "Authorization: token ${STORAGE_TOKEN}" \
                 -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/absoracloud/web-disk/actions/workflows/delete.yml/dispatches" \
+                "https://api.github.com/repos/AADI-playz23/web-disk/actions/workflows/delete.yml/dispatches" \
                 -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"site_id\":\"$SITE_ID\"}}"
               echo "✅ Dispatched delete for $USERNAME/$SITE_ID"
             fi
