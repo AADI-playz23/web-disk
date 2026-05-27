@@ -1,5 +1,5 @@
-name: BugHost Delete Engine
-run-name: 💀 Kill Slot ${{ inputs.site_id }} for ${{ inputs.username }}
+name: Absora Delete Engine
+run-name: "💀 Kill Slot ${{ inputs.site_id }} for ${{ inputs.username }}"
 
 on:
   workflow_dispatch:
@@ -10,39 +10,55 @@ on:
         required: true
 
 concurrency:
-  group: bughost-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
-  cancel-in-progress: true 
+  group: absora-delete-${{ github.event.inputs.username }}_${{ github.event.inputs.site_id }}
+  cancel-in-progress: true
 
 jobs:
-  kill-runner:
+  kill-slot:
     runs-on: ubuntu-latest
     env:
       SECURE_USER: ${{ github.event.inputs.username }}
       SITE_ID: ${{ github.event.inputs.site_id }}
-      SITE_URL: ${{ secrets.SITE_URL }}
+      REDIS_URL: "https://vocal-filly-130607.upstash.io"
+      REDIS_TOKEN: "gQAAAAAAAf4vAAIgcDE0NGVmYTc1MzY4Yzg0ZWE4YWZhYWUzOTZhODA5YWY1ZQ"
+
     steps:
-      - name: Stop Tunnel & Clean Session
+      - name: Set Kill Signal & Cleanup
         run: |
+          KEY="${SECURE_USER}_${SITE_ID}"
+          echo "💀 Killing slot: $KEY"
+
+          # 1. Set kill signal in Redis (running runner picks this up)
+          curl -s "$REDIS_URL" \
+            -H "Authorization: Bearer $REDIS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "[\"SET\", \"kill:$KEY\", \"1\", \"EX\", \"300\"]" > /dev/null
+
+          # 2. Mark session as offline in Redis (immediate)
+          curl -s "$REDIS_URL" \
+            -H "Authorization: Bearer $REDIS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\"]" > /dev/null
+
+          echo "✅ Kill signal sent + session marked offline in Redis"
+
+          # 3. Clean up git repo (fallback status files)
           git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env
           cd storage_env
-          
-          rm -f "sessions/${SECURE_USER}_${SITE_ID}.txt"
-          
+
+          rm -f "sessions/${KEY}.txt"
+          echo "{\"status\":\"offline\",\"url\":\"\"}" > "status/${KEY}.json"
+
           git config user.name "System"
-          git config user.email "sys@bughost.com"
-          git add sessions/
-          
+          git config user.email "sys@absora.com"
+          git add -A
+
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "Killed Slot $SITE_ID (Files Preserved)"
+            git commit -m "Killed Slot $SITE_ID for $SECURE_USER"
             for i in {1..5}; do
               git pull --rebase origin main || git rebase --abort
               git push origin main && break || sleep 4
             done
           fi
-          fi
 
-          # ✅ Write offline status to git repo
-          echo "{\"status\":\"offline\",\"url\":\"\"}" > "status/${SECURE_USER}_${SITE_ID}.json"
-          git add status/
-          git diff-index --quiet HEAD || git commit -m "Status: offline for ${SECURE_USER} slot ${SITE_ID}"
-          for i in {1..5}; do git pull --rebase origin main || git rebase --abort; git push origin main && break || sleep 4; done
+          echo "✅ Git cleanup done"
