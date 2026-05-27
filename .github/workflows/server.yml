@@ -9,23 +9,20 @@ on:
         description: "User that triggered this runner (for logging only)"
         default: "system"
 
-# No concurrency group — allows up to 2 parallel runners (enforced by dashboard.php)
-
 jobs:
   shared-host:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     env:
-      REDIS_URL: "https://vocal-filly-130607.upstash.io"
-      REDIS_TOKEN: "gQAAAAAAAf4vAAIgcDE0NGVmYTc1MzY4Yzg0ZWE4YWZhYWUzOTZhODA5YWY1ZQ"
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      REDIS_TOKEN: ${{ secrets.REDIS_TOKEN }}
       RUNNER_ID: ${{ github.run_id }}
-      SITE_URL: ${{ secrets.SITE_URL }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+      CF_BASE_DOMAIN: "absora.dpdns.org"
 
     steps:
-      # ═══════════════════════════════════════════════════════
-      #  STEP 1: SETUP INFRASTRUCTURE
-      # ═══════════════════════════════════════════════════════
       - name: 1. Setup Infrastructure
         run: |
           echo "═══════════════════════════════════════════════"
@@ -33,30 +30,25 @@ jobs:
           echo "  Triggered by: ${{ inputs.trigger_user }}"
           echo "═══════════════════════════════════════════════"
 
-          # Install cloudflared
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb > /dev/null 2>&1
 
-          # Clone storage repo
           git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env
           cd storage_env
           git config user.name "System"
           git config user.email "sys@absora.com"
 
-          # Register runner in Redis
           NOW=$(date +%s)
           curl -s "$REDIS_URL" \
             -H "Authorization: Bearer $REDIS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "[\"HSET\", \"runner:$RUNNER_ID\", \"heartbeat\", \"$NOW\", \"capacity\", \"10\", \"start_time\", \"$NOW\", \"active_count\", \"0\"]" > /dev/null
 
-          # Set TTL (7 hours safety — auto-cleanup if runner crashes)
           curl -s "$REDIS_URL" \
             -H "Authorization: Bearer $REDIS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "[\"EXPIRE\", \"runner:$RUNNER_ID\", \"25200\"]" > /dev/null
 
-          # Add to active runners set
           curl -s "$REDIS_URL" \
             -H "Authorization: Bearer $REDIS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -64,16 +56,11 @@ jobs:
 
           echo "✅ Runner $RUNNER_ID registered in Redis"
 
-      # ═══════════════════════════════════════════════════════
-      #  STEP 2: MULTI-TENANT HOST LOOP
-      # ═══════════════════════════════════════════════════════
       - name: 2. Multi-Tenant Host Loop
         run: |
           cd storage_env
 
-          # ──────────────────────────────────────────
-          #  REDIS HELPER
-          # ──────────────────────────────────────────
+          # ── REDIS HELPER ──
           redis_cmd() {
             curl -s "$REDIS_URL" \
               -H "Authorization: Bearer $REDIS_TOKEN" \
@@ -86,28 +73,71 @@ jobs:
             echo "$RES" | jq -r '.result // empty' 2>/dev/null
           }
 
-          # ──────────────────────────────────────────
-          #  STATE TRACKING (bash associative arrays)
-          # ──────────────────────────────────────────
+          # ── STATE TRACKING ──
           declare -A USER_PHP_PID
           declare -A USER_TUNNEL_PID
           declare -A USER_PORT
           declare -A USER_SESSION_START
           declare -A USER_SESSION_LIMIT
           declare -A USER_PLAN
-          declare -A USER_PASSWORD
+          declare -A USER_SUBDOMAIN
 
           NEXT_PORT=8080
           ACTIVE_COUNT=0
           EMPTY_CYCLES=0
-          MAX_EMPTY_CYCLES=10       # 10 * 30s = 5 minutes idle before shutdown
+          MAX_EMPTY_CYCLES=10
           START_TIME=$(date +%s)
-          MAX_RUNTIME=21000          # 5h50m — leave 10min buffer before GitHub's 6h limit
+          MAX_RUNTIME=21000
           GIT_SYNC_COUNTER=0
 
-          # ──────────────────────────────────────────
-          #  DEPLOY A USER
-          # ──────────────────────────────────────────
+          # ── CLOUDFLARE CNAME HELPER ──
+          update_cname() {
+            local SUBDOMAIN="$1"
+            local TUNNEL_HOST="$2"
+            local RECORD_NAME="${SUBDOMAIN}.${CF_BASE_DOMAIN}"
+
+            echo "  🌐 CNAME: $RECORD_NAME → $TUNNEL_HOST"
+
+            local EXISTING=$(curl -s "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$RECORD_NAME&type=CNAME" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json")
+
+            local RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
+
+            if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
+              curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"type\":\"CNAME\",\"name\":\"$RECORD_NAME\",\"content\":\"$TUNNEL_HOST\",\"proxied\":false,\"ttl\":60}" > /dev/null
+              echo "  ✅ CNAME updated"
+            else
+              curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"type\":\"CNAME\",\"name\":\"$RECORD_NAME\",\"content\":\"$TUNNEL_HOST\",\"proxied\":false,\"ttl\":60}" > /dev/null
+              echo "  ✅ CNAME created"
+            fi
+          }
+
+          remove_cname() {
+            local SUBDOMAIN="$1"
+            local RECORD_NAME="${SUBDOMAIN}.${CF_BASE_DOMAIN}"
+
+            local EXISTING=$(curl -s "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$RECORD_NAME&type=CNAME" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json")
+
+            local RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
+
+            if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
+              curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json" > /dev/null
+              echo "  🗑️ CNAME removed: $RECORD_NAME"
+            fi
+          }
+
+          # ── DEPLOY A USER ──
           deploy_user() {
             local DATA="$1"
             local USERNAME=$(echo "$DATA" | jq -r '.username')
@@ -115,30 +145,28 @@ jobs:
             local SITE_ID=$(echo "$DATA" | jq -r '.site_id')
             local PLAN=$(echo "$DATA" | jq -r '.plan')
             local SESSION_LIMIT=$(echo "$DATA" | jq -r '.session_limit')
+            local SUBDOMAIN=$(echo "$DATA" | jq -r '.subdomain // empty')
             local KEY="${USERNAME}_${SITE_ID}"
 
             echo "┌──────────────────────────────────────────┐"
             echo "│ 📦 DEPLOYING: $KEY (plan: $PLAN)         │"
             echo "└──────────────────────────────────────────┘"
 
-            # Skip if already hosted
             if [ -n "${USER_PHP_PID[$KEY]+x}" ]; then
-              echo "⚠️  $KEY already hosted on this runner, skipping"
+              echo "⚠️  $KEY already hosted, skipping"
               return
             fi
 
-            # Check capacity
             if [ $ACTIVE_COUNT -ge 10 ]; then
               echo "❌ Runner at capacity (10/10), re-queuing $KEY"
               redis_cmd "[\"LPUSH\", \"queue:deploy\", $(echo "$DATA" | jq -c '.' | jq -Rs '.')]" > /dev/null
               return
             fi
 
-            # Find next available port
             local PORT=$NEXT_PORT
             NEXT_PORT=$((NEXT_PORT + 1))
 
-            # ── Setup user directory ──
+            # Setup user directory
             local USER_DIR="users/$USERNAME/$SITE_ID"
             mkdir -p "$USER_DIR"
 
@@ -146,12 +174,13 @@ jobs:
               echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#030712;color:#fff;'><h1>🚀 Absora Instance $SITE_ID Live</h1></body></html>" > "$USER_DIR/index.html"
             fi
 
-            # ── Inject File Manager (upload.php) with storage quotas ──
-            local MAX_BYTES=524288000   # 500MB default
+            # Storage quotas
+            local MAX_BYTES=524288000
             if [ "$PLAN" == "developer" ]; then MAX_BYTES=53687091200; fi
             if [ "$PLAN" == "professional" ]; then MAX_BYTES=214748364800; fi
             if [ "$PLAN" == "studio" ]; then MAX_BYTES=1099511627776; fi
 
+            # Inject upload.php
             cat <<'UPLOAD_EOF' > "$USER_DIR/upload.php"
           <?php
           session_start();
@@ -218,22 +247,20 @@ jobs:
           </div></body></html>
           UPLOAD_EOF
 
-            # Template substitution
             sed -i "s/%%USERNAME%%/$USERNAME/g" "$USER_DIR/upload.php"
             sed -i "s/%%SITE_ID%%/$SITE_ID/g" "$USER_DIR/upload.php"
             sed -i "s/%%PLAN%%/$PLAN/g" "$USER_DIR/upload.php"
             sed -i "s/%%PASSWORD%%/$PASSWORD/g" "$USER_DIR/upload.php"
             sed -i "s/%%MAX_BYTES%%/$MAX_BYTES/g" "$USER_DIR/upload.php"
 
-            # ── Start PHP server ──
+            # Start PHP server
             php -S 0.0.0.0:$PORT -t "$USER_DIR" > "/tmp/${KEY}_access.log" 2>&1 &
             local PHP_PID=$!
-            echo "  🖥  PHP server started on port $PORT (PID: $PHP_PID)"
+            echo "  🖥  PHP on port $PORT (PID: $PHP_PID)"
 
-            # ── Start Cloudflare tunnel ──
+            # Start Cloudflare tunnel
             if [ "$PLAN" == "studio" ] && [ -f "$USER_DIR/cf_token.txt" ]; then
               local CF_TOKEN=$(cat "$USER_DIR/cf_token.txt")
-              echo "  💎 Studio: Linking custom domain..."
               cloudflared tunnel run --token "$CF_TOKEN" > "/tmp/${KEY}_tunnel.log" 2>&1 &
               local TUNNEL_PID=$!
               sleep 5
@@ -241,8 +268,6 @@ jobs:
             else
               cloudflared tunnel --url http://localhost:$PORT > "/tmp/${KEY}_tunnel.log" 2>&1 &
               local TUNNEL_PID=$!
-
-              # Wait for tunnel URL
               local URL=""
               for i in $(seq 1 20); do
                 sleep 2
@@ -252,14 +277,23 @@ jobs:
             fi
 
             if [ -z "$URL" ]; then
-              echo "  ❌ Tunnel failed for $KEY — cleaning up"
+              echo "  ❌ Tunnel failed for $KEY"
               kill $PHP_PID 2>/dev/null || true
               kill $TUNNEL_PID 2>/dev/null || true
               redis_cmd "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\"]" > /dev/null
               return
             fi
 
-            # ── Store state ──
+            # ── Cloudflare CNAME for subdomain ──
+            if [ -n "$SUBDOMAIN" ] && [ "$SUBDOMAIN" != "null" ] && [ "$SUBDOMAIN" != "" ]; then
+              local TUNNEL_HOST=$(echo "$URL" | sed 's|https://||')
+              update_cname "$SUBDOMAIN" "$TUNNEL_HOST"
+              local SUBDOMAIN_URL="https://${SUBDOMAIN}.${CF_BASE_DOMAIN}"
+            else
+              local SUBDOMAIN_URL=""
+            fi
+
+            # Store state
             local NOW=$(date +%s)
             USER_PHP_PID[$KEY]=$PHP_PID
             USER_TUNNEL_PID[$KEY]=$TUNNEL_PID
@@ -267,76 +301,75 @@ jobs:
             USER_SESSION_START[$KEY]=$NOW
             USER_SESSION_LIMIT[$KEY]=$SESSION_LIMIT
             USER_PLAN[$KEY]=$PLAN
-            USER_PASSWORD[$KEY]=$PASSWORD
+            USER_SUBDOMAIN[$KEY]=$SUBDOMAIN
             ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
 
-            # ── Update Redis ──
-            redis_cmd "[\"HSET\", \"session:$KEY\", \"status\", \"live\", \"url\", \"$URL\", \"port\", \"$PORT\", \"runner_id\", \"$RUNNER_ID\", \"session_start\", \"$NOW\"]" > /dev/null
+            # Update Redis (include subdomain_url)
+            if [ -n "$SUBDOMAIN_URL" ]; then
+              redis_cmd "[\"HSET\", \"session:$KEY\", \"status\", \"live\", \"url\", \"$URL\", \"subdomain_url\", \"$SUBDOMAIN_URL\", \"port\", \"$PORT\", \"runner_id\", \"$RUNNER_ID\", \"session_start\", \"$NOW\"]" > /dev/null
+            else
+              redis_cmd "[\"HSET\", \"session:$KEY\", \"status\", \"live\", \"url\", \"$URL\", \"port\", \"$PORT\", \"runner_id\", \"$RUNNER_ID\", \"session_start\", \"$NOW\"]" > /dev/null
+            fi
             redis_cmd "[\"SADD\", \"runner:$RUNNER_ID:slots\", \"$KEY\"]" > /dev/null
             redis_cmd "[\"HSET\", \"runner:$RUNNER_ID\", \"active_count\", \"$ACTIVE_COUNT\", \"heartbeat\", \"$NOW\"]" > /dev/null
 
-            # Initialise weekly usage tracking if not exists
             local WEEK_EXISTS=$(redis_result "[\"EXISTS\", \"usage:$KEY\"]")
             if [ "$WEEK_EXISTS" != "1" ]; then
               redis_cmd "[\"HSET\", \"usage:$KEY\", \"weekly_seconds\", \"0\", \"week_start\", \"$NOW\"]" > /dev/null
             fi
 
-            # ── Write to git (fallback for status.php) ──
+            # Write to git
             mkdir -p status sessions
             echo "{\"status\":\"live\",\"url\":\"${URL}\"}" > "status/${KEY}.json"
             echo "$URL" > "sessions/${KEY}.txt"
 
-            echo "  ✅ $KEY deployed → $URL (port $PORT)"
+            echo "  ✅ $KEY → $URL"
+            if [ -n "$SUBDOMAIN_URL" ]; then
+              echo "  🌐 $SUBDOMAIN_URL"
+            fi
             echo ""
           }
 
-          # ──────────────────────────────────────────
-          #  KILL A USER
-          # ──────────────────────────────────────────
+          # ── KILL A USER ──
           kill_user() {
             local KEY="$1"
             local REASON="$2"
 
             echo "🔴 Stopping $KEY: $REASON"
 
-            # Kill processes
             kill "${USER_PHP_PID[$KEY]}" 2>/dev/null || true
             kill "${USER_TUNNEL_PID[$KEY]}" 2>/dev/null || true
 
-            # Calculate session elapsed and update weekly usage
             local NOW=$(date +%s)
-            local SESSION_START="${USER_SESSION_START[$KEY]}"
-            local ELAPSED=$((NOW - SESSION_START))
-
-            # Increment weekly_seconds in Redis
+            local ELAPSED=$((NOW - ${USER_SESSION_START[$KEY]}))
             redis_cmd "[\"HINCRBY\", \"usage:$KEY\", \"weekly_seconds\", \"$ELAPSED\"]" > /dev/null
 
-            # Mark offline in Redis
-            redis_cmd "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\"]" > /dev/null
+            # Remove CNAME if subdomain was set
+            local SUB="${USER_SUBDOMAIN[$KEY]}"
+            if [ -n "$SUB" ] && [ "$SUB" != "null" ] && [ "$SUB" != "" ]; then
+              remove_cname "$SUB"
+            fi
+
+            redis_cmd "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\", \"subdomain_url\", \"\"]" > /dev/null
             redis_cmd "[\"SREM\", \"runner:$RUNNER_ID:slots\", \"$KEY\"]" > /dev/null
 
-            # Write to git
             echo "{\"status\":\"offline\",\"url\":\"\"}" > "status/${KEY}.json" 2>/dev/null || true
             rm -f "sessions/${KEY}.txt" 2>/dev/null || true
 
-            # Clear state
             unset USER_PHP_PID[$KEY]
             unset USER_TUNNEL_PID[$KEY]
             unset USER_PORT[$KEY]
             unset USER_SESSION_START[$KEY]
             unset USER_SESSION_LIMIT[$KEY]
             unset USER_PLAN[$KEY]
-            unset USER_PASSWORD[$KEY]
+            unset USER_SUBDOMAIN[$KEY]
             ACTIVE_COUNT=$((ACTIVE_COUNT - 1))
 
             redis_cmd "[\"HSET\", \"runner:$RUNNER_ID\", \"active_count\", \"$ACTIVE_COUNT\"]" > /dev/null
-
-            echo "   → $KEY stopped. Active users: $ACTIVE_COUNT"
+            echo "   → $KEY stopped. Active: $ACTIVE_COUNT"
           }
 
-          # ──────────────────────────────────────────
-          #  GIT SYNC (periodic)
-          # ──────────────────────────────────────────
+          # ── GIT SYNC ──
           git_sync() {
             git add -A 2>/dev/null
             if ! git diff-index --quiet HEAD 2>/dev/null; then
@@ -352,37 +385,31 @@ jobs:
           #  MAIN LOOP
           # ══════════════════════════════════════════
           echo ""
-          echo "🚀 Shared Runner $RUNNER_ID entering main loop..."
-          echo "   Max runtime: $((MAX_RUNTIME / 60)) minutes"
+          echo "🚀 Shared Runner $RUNNER_ID — main loop started"
+          echo "   Max runtime: $((MAX_RUNTIME / 60)) min"
           echo ""
 
           while true; do
             NOW=$(date +%s)
             ELAPSED_TOTAL=$((NOW - START_TIME))
 
-            # ── Check 6h limit ──
             if [ $ELAPSED_TOTAL -ge $MAX_RUNTIME ]; then
-              echo ""
-              echo "⏰ Approaching 6h GitHub limit ($((ELAPSED_TOTAL / 60))min elapsed). Shutting down."
+              echo "⏰ Approaching 6h limit. Shutting down."
               break
             fi
 
-            # ── Update heartbeat ──
             redis_cmd "[\"HSET\", \"runner:$RUNNER_ID\", \"heartbeat\", \"$NOW\"]" > /dev/null
 
-            # ── Process deploy queue ──
+            # Process deploy queue
             QUEUE_PROCESSED=0
             while [ $ACTIVE_COUNT -lt 10 ]; do
               DEPLOY_RAW=$(redis_result "[\"RPOP\", \"queue:deploy\"]")
               if [ -z "$DEPLOY_RAW" ] || [ "$DEPLOY_RAW" = "null" ]; then break; fi
 
-              # The value from Redis might be double-encoded, try to parse
               DEPLOY_DATA="$DEPLOY_RAW"
-
-              # Validate it's valid JSON with required fields
               VALID=$(echo "$DEPLOY_DATA" | jq -r '.username // empty' 2>/dev/null)
               if [ -z "$VALID" ]; then
-                echo "⚠️  Invalid deploy data, skipping: $DEPLOY_RAW"
+                echo "⚠️  Invalid deploy data, skipping"
                 continue
               fi
 
@@ -394,7 +421,7 @@ jobs:
               echo "📊 Processed $QUEUE_PROCESSED deploy(s). Active: $ACTIVE_COUNT/10"
             fi
 
-            # ── Check for kill signals ──
+            # Check kill signals
             KEYS_TO_KILL=()
             for KEY in "${!USER_PHP_PID[@]}"; do
               KILL_EXISTS=$(redis_result "[\"EXISTS\", \"kill:$KEY\"]")
@@ -403,54 +430,46 @@ jobs:
                 redis_cmd "[\"DEL\", \"kill:$KEY\"]" > /dev/null
               fi
             done
-
             for KEY in "${KEYS_TO_KILL[@]}"; do
               kill_user "$KEY" "User requested stop"
             done
 
-            # ── Check session time limits ──
+            # Check session limits
             KEYS_TO_EXPIRE=()
             for KEY in "${!USER_PHP_PID[@]}"; do
               SESSION_ELAPSED=$((NOW - ${USER_SESSION_START[$KEY]}))
               LIMIT=${USER_SESSION_LIMIT[$KEY]}
-
               if [ $SESSION_ELAPSED -ge $LIMIT ]; then
                 KEYS_TO_EXPIRE+=("$KEY")
               fi
-
-              # Also check if process died unexpectedly
               if ! kill -0 "${USER_PHP_PID[$KEY]}" 2>/dev/null; then
                 echo "⚠️  PHP process for $KEY died unexpectedly"
                 KEYS_TO_EXPIRE+=("$KEY")
               fi
             done
-
             for KEY in "${KEYS_TO_EXPIRE[@]}"; do
               kill_user "$KEY" "Session limit reached"
             done
 
-            # ── Check if runner is empty ──
+            # Check if empty
             if [ $ACTIVE_COUNT -eq 0 ]; then
               EMPTY_CYCLES=$((EMPTY_CYCLES + 1))
               if [ $EMPTY_CYCLES -ge $MAX_EMPTY_CYCLES ]; then
-                echo ""
-                echo "💤 No active users for 5 minutes. Shutting down idle runner."
+                echo "💤 No active users for 5 min. Shutting down."
                 break
               fi
             else
               EMPTY_CYCLES=0
             fi
 
-            # ── Periodic git sync (every ~2.5 min = 5 cycles) ──
+            # Periodic git sync
             GIT_SYNC_COUNTER=$((GIT_SYNC_COUNTER + 1))
             if [ $((GIT_SYNC_COUNTER % 5)) -eq 0 ]; then
               git_sync
             fi
 
-            # ── Status line ──
             if [ $((GIT_SYNC_COUNTER % 4)) -eq 0 ]; then
-              RUNTIME_MIN=$((ELAPSED_TOTAL / 60))
-              echo "⏱  Runtime: ${RUNTIME_MIN}min | Active: $ACTIVE_COUNT/10 | Empty cycles: $EMPTY_CYCLES/$MAX_EMPTY_CYCLES"
+              echo "⏱  Runtime: $((ELAPSED_TOTAL / 60))min | Active: $ACTIVE_COUNT/10 | Idle: $EMPTY_CYCLES/$MAX_EMPTY_CYCLES"
             fi
 
             sleep 30
@@ -460,21 +479,17 @@ jobs:
           #  CLEANUP
           # ══════════════════════════════════════════
           echo ""
-          echo "🧹 ═══ CLEANUP: Shutting down all active users ═══"
+          echo "🧹 Cleanup: shutting down all users..."
 
           ALL_KEYS=("${!USER_PHP_PID[@]}")
           for KEY in "${ALL_KEYS[@]}"; do
             kill_user "$KEY" "Runner shutdown"
           done
 
-          # Final git sync
           git_sync
 
-          # Remove runner from Redis
           redis_cmd "[\"SREM\", \"runners:active\", \"$RUNNER_ID\"]" > /dev/null
           redis_cmd "[\"DEL\", \"runner:$RUNNER_ID\"]" > /dev/null
           redis_cmd "[\"DEL\", \"runner:$RUNNER_ID:slots\"]" > /dev/null
 
-          echo ""
-          echo "👋 Runner $RUNNER_ID shut down cleanly."
-          echo "   Total runtime: $(( ($(date +%s) - START_TIME) / 60 )) minutes"
+          echo "👋 Runner $RUNNER_ID done. Total: $(( ($(date +%s) - START_TIME) / 60 )) min"

@@ -19,8 +19,11 @@ jobs:
     env:
       SECURE_USER: ${{ github.event.inputs.username }}
       SITE_ID: ${{ github.event.inputs.site_id }}
-      REDIS_URL: "https://vocal-filly-130607.upstash.io"
-      REDIS_TOKEN: "gQAAAAAAAf4vAAIgcDE0NGVmYTc1MzY4Yzg0ZWE4YWZhYWUzOTZhODA5YWY1ZQ"
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      REDIS_TOKEN: ${{ secrets.REDIS_TOKEN }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+      CF_BASE_DOMAIN: "absora.dpdns.org"
 
     steps:
       - name: Set Kill Signal & Cleanup
@@ -28,21 +31,50 @@ jobs:
           KEY="${SECURE_USER}_${SITE_ID}"
           echo "💀 Killing slot: $KEY"
 
-          # 1. Set kill signal in Redis (running runner picks this up)
+          # 1. Set kill signal in Redis
           curl -s "$REDIS_URL" \
             -H "Authorization: Bearer $REDIS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "[\"SET\", \"kill:$KEY\", \"1\", \"EX\", \"300\"]" > /dev/null
 
-          # 2. Mark session as offline in Redis (immediate)
+          # 2. Get subdomain before marking offline (for CNAME cleanup)
+          SUBDOMAIN_URL=$(curl -s "$REDIS_URL" \
+            -H "Authorization: Bearer $REDIS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "[\"HGET\", \"session:$KEY\", \"subdomain_url\"]" | jq -r '.result // empty')
+
+          # 3. Mark session offline in Redis
           curl -s "$REDIS_URL" \
             -H "Authorization: Bearer $REDIS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\"]" > /dev/null
+            -d "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\", \"subdomain_url\", \"\"]" > /dev/null
 
-          echo "✅ Kill signal sent + session marked offline in Redis"
+          # 4. Remove CNAME if subdomain was set
+          if [ -n "$SUBDOMAIN_URL" ] && [ "$SUBDOMAIN_URL" != "null" ]; then
+            # Extract subdomain name from URL (e.g. https://myapp.absora.dpdns.org → myapp)
+            SUBDOMAIN=$(echo "$SUBDOMAIN_URL" | sed "s|https://||" | sed "s|\.${CF_BASE_DOMAIN}||")
+            if [ -n "$SUBDOMAIN" ]; then
+              RECORD_NAME="${SUBDOMAIN}.${CF_BASE_DOMAIN}"
+              echo "🌐 Removing CNAME: $RECORD_NAME"
 
-          # 3. Clean up git repo (fallback status files)
+              EXISTING=$(curl -s "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$RECORD_NAME&type=CNAME" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json")
+
+              RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
+
+              if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
+                curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
+                  -H "Authorization: Bearer $CF_API_TOKEN" \
+                  -H "Content-Type: application/json" > /dev/null
+                echo "✅ CNAME removed"
+              fi
+            fi
+          fi
+
+          echo "✅ Kill signal sent + session marked offline"
+
+          # 5. Clean up git repo
           git clone https://${{ secrets.STORAGE_TOKEN }}@github.com/AADI-playz23/webstore.git storage_env
           cd storage_env
 
@@ -60,5 +92,3 @@ jobs:
               git push origin main && break || sleep 4
             done
           fi
-
-          echo "✅ Git cleanup done"
