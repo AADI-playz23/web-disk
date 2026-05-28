@@ -21,9 +21,6 @@ jobs:
       SITE_ID: ${{ github.event.inputs.site_id }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
       REDIS_TOKEN: ${{ secrets.REDIS_TOKEN }}
-      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-      CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
-      CF_BASE_DOMAIN: "absora.dpdns.org"
 
     steps:
       - name: Set Kill Signal & Cleanup
@@ -37,8 +34,8 @@ jobs:
             -H "Content-Type: application/json" \
             -d "[\"SET\", \"kill:$KEY\", \"1\", \"EX\", \"300\"]" > /dev/null
 
-          # 2. Get subdomain before marking offline (for CNAME cleanup)
-          SUBDOMAIN_URL=$(curl -s "$REDIS_URL" \
+          # 2. Get subdomain before marking offline (for mapping cleanup)
+          SUBDOMAIN=$(curl -s "$REDIS_URL" \
             -H "Authorization: Bearer $REDIS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "[\"HGET\", \"session:$KEY\", \"subdomain_url\"]" | jq -r '.result // empty')
@@ -49,26 +46,17 @@ jobs:
             -H "Content-Type: application/json" \
             -d "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\", \"subdomain_url\", \"\"]" > /dev/null
 
-          # 4. Remove CNAME if subdomain was set
-          if [ -n "$SUBDOMAIN_URL" ] && [ "$SUBDOMAIN_URL" != "null" ]; then
+          # 4. Remove subdomain mapping from Redis (if set)
+          if [ -n "$SUBDOMAIN" ] && [ "$SUBDOMAIN" != "null" ]; then
             # Extract subdomain name from URL (e.g. https://myapp.absora.dpdns.org → myapp)
-            SUBDOMAIN=$(echo "$SUBDOMAIN_URL" | sed "s|https://||" | sed "s|\.${CF_BASE_DOMAIN}||")
-            if [ -n "$SUBDOMAIN" ]; then
-              RECORD_NAME="${SUBDOMAIN}.${CF_BASE_DOMAIN}"
-              echo "🌐 Removing CNAME: $RECORD_NAME"
-
-              EXISTING=$(curl -s "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$RECORD_NAME&type=CNAME" \
-                -H "Authorization: Bearer $CF_API_TOKEN" \
-                -H "Content-Type: application/json")
-
-              RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
-
-              if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
-                curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
-                  -H "Authorization: Bearer $CF_API_TOKEN" \
-                  -H "Content-Type: application/json" > /dev/null
-                echo "✅ CNAME removed"
-              fi
+            SUB_NAME=$(echo "$SUBDOMAIN" | sed 's|https://||' | sed 's|\.absora\.dpdns\.org||')
+            if [ -n "$SUB_NAME" ]; then
+              echo "🌐 Removing subdomain mapping: $SUB_NAME"
+              curl -s "$REDIS_URL" \
+                -H "Authorization: Bearer $REDIS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "[\"DEL\", \"subdomain:$SUB_NAME\"]" > /dev/null
+              echo "✅ Mapping removed"
             fi
           fi
 

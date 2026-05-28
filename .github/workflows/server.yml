@@ -18,9 +18,6 @@ jobs:
       REDIS_URL: ${{ secrets.REDIS_URL }}
       REDIS_TOKEN: ${{ secrets.REDIS_TOKEN }}
       RUNNER_ID: ${{ github.run_id }}
-      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-      CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
-      CF_BASE_DOMAIN: "absora.dpdns.org"
 
     steps:
       - name: 1. Setup Infrastructure
@@ -90,51 +87,18 @@ jobs:
           MAX_RUNTIME=21000
           GIT_SYNC_COUNTER=0
 
-          # ── CLOUDFLARE CNAME HELPER ──
-          update_cname() {
+          # ── SUBDOMAIN → TUNNEL REDIS MAPPING (used by Cloudflare Worker) ──
+          set_subdomain_mapping() {
             local SUBDOMAIN="$1"
-            local TUNNEL_HOST="$2"
-            local RECORD_NAME="${SUBDOMAIN}.${CF_BASE_DOMAIN}"
-
-            echo "  🌐 CNAME: $RECORD_NAME → $TUNNEL_HOST"
-
-            local EXISTING=$(curl -s "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$RECORD_NAME&type=CNAME" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -H "Content-Type: application/json")
-
-            local RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
-
-            if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
-              curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
-                -H "Authorization: Bearer $CF_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "{\"type\":\"CNAME\",\"name\":\"$RECORD_NAME\",\"content\":\"$TUNNEL_HOST\",\"proxied\":false,\"ttl\":60}" > /dev/null
-              echo "  ✅ CNAME updated"
-            else
-              curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
-                -H "Authorization: Bearer $CF_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "{\"type\":\"CNAME\",\"name\":\"$RECORD_NAME\",\"content\":\"$TUNNEL_HOST\",\"proxied\":false,\"ttl\":60}" > /dev/null
-              echo "  ✅ CNAME created"
-            fi
+            local TUNNEL_URL="$2"
+            echo "  🌐 Subdomain mapping: ${SUBDOMAIN} → ${TUNNEL_URL}"
+            redis_cmd "[\"HSET\", \"subdomain:$SUBDOMAIN\", \"tunnel_url\", \"$TUNNEL_URL\"]" > /dev/null
           }
 
-          remove_cname() {
+          remove_subdomain_mapping() {
             local SUBDOMAIN="$1"
-            local RECORD_NAME="${SUBDOMAIN}.${CF_BASE_DOMAIN}"
-
-            local EXISTING=$(curl -s "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$RECORD_NAME&type=CNAME" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -H "Content-Type: application/json")
-
-            local RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
-
-            if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
-              curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
-                -H "Authorization: Bearer $CF_API_TOKEN" \
-                -H "Content-Type: application/json" > /dev/null
-              echo "  🗑️ CNAME removed: $RECORD_NAME"
-            fi
+            echo "  🗑️ Removing subdomain mapping: ${SUBDOMAIN}"
+            redis_cmd "[\"DEL\", \"subdomain:$SUBDOMAIN\"]" > /dev/null
           }
 
           # ── DEPLOY A USER ──
@@ -284,11 +248,10 @@ jobs:
               return
             fi
 
-            # ── Cloudflare CNAME for subdomain ──
+            # ── Subdomain mapping for Worker proxy (paid users only) ──
             if [ -n "$SUBDOMAIN" ] && [ "$SUBDOMAIN" != "null" ] && [ "$SUBDOMAIN" != "" ]; then
-              local TUNNEL_HOST=$(echo "$URL" | sed 's|https://||')
-              update_cname "$SUBDOMAIN" "$TUNNEL_HOST"
-              local SUBDOMAIN_URL="https://${SUBDOMAIN}.${CF_BASE_DOMAIN}"
+              set_subdomain_mapping "$SUBDOMAIN" "$URL"
+              local SUBDOMAIN_URL="https://${SUBDOMAIN}.absora.dpdns.org"
             else
               local SUBDOMAIN_URL=""
             fi
@@ -344,10 +307,10 @@ jobs:
             local ELAPSED=$((NOW - ${USER_SESSION_START[$KEY]}))
             redis_cmd "[\"HINCRBY\", \"usage:$KEY\", \"weekly_seconds\", \"$ELAPSED\"]" > /dev/null
 
-            # Remove CNAME if subdomain was set
+            # Remove subdomain mapping if set
             local SUB="${USER_SUBDOMAIN[$KEY]}"
             if [ -n "$SUB" ] && [ "$SUB" != "null" ] && [ "$SUB" != "" ]; then
-              remove_cname "$SUB"
+              remove_subdomain_mapping "$SUB"
             fi
 
             redis_cmd "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\", \"subdomain_url\", \"\"]" > /dev/null
