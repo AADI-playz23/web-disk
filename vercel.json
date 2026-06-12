@@ -1,10 +1,6 @@
 {
   "version": 2,
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/:path*" },
-    { "source": "/dashboard", "destination": "/public/dashboard.html" },
-    { "source": "/", "destination": "/public/index.html" }
-  ],
+  "cleanUrls": true,
   "headers": [
     {
       "source": "/api/(.*)",
