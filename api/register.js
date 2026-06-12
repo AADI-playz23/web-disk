@@ -44,6 +44,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ success: true, message: 'Account created' });
   } catch (err) {
     console.error('[register]', err);
-    return res.status(500).json({ success: false, message: 'Registration failed' });
+    return res.status(500).json({ success: false, message: `Registration failed. DB Error: ${err.message}` });
   }
 }
