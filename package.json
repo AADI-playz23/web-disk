@@ -1,0 +1,19 @@
+{
+  "name": "absora-cloud",
+  "version": "1.0.0",
+  "description": "Absora Cloud hosting control panel — Vercel + Cloudflare D1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "formidable": "^3.5.1",
+    "@google/generative-ai": "^0.21.0"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  }
+}
