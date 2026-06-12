@@ -400,15 +400,16 @@
             bootBtn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Initializing...'; bootBtn.disabled = true;
             renewBtn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Renewing...'; renewBtn.disabled = true;
 
-            const body = new URLSearchParams();
-            body.append('username', GLOBAL_USER);
-            body.append('password', GLOBAL_PASS);
-            body.append('site_id', id);
+            const body = JSON.stringify({
+                username: GLOBAL_USER,
+                password: GLOBAL_PASS,
+                site_id: id
+            });
 
             expectedState[id] = Date.now();
 
             // ← Updated: dashboard.php → /api/dashboard
-            fetch('/api/dashboard', { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+            fetch('/api/dashboard', { method: 'POST', body, headers: { 'Content-Type': 'application/json' } })
             .then(res => res.text())
             .then(text => {
                 if (text.includes('Error:')) {
@@ -425,13 +426,14 @@
 
         function triggerDelete(id) {
             expectedState[id] = 'stopping';
-            const body = new URLSearchParams();
-            body.append('action', 'delete');
-            body.append('username', GLOBAL_USER);
-            body.append('site_id', id);
+            const body = JSON.stringify({
+                action: 'delete',
+                username: GLOBAL_USER,
+                site_id: id
+            });
 
             // ← Updated: dashboard.php → /api/dashboard
-            fetch('/api/dashboard', { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+            fetch('/api/dashboard', { method: 'POST', body, headers: { 'Content-Type': 'application/json' } })
             .then(() => {
                 stopCountdown(id);
                 setTimeout(() => { expectedState[id] = null; syncState(id); fetchQuota(id); }, 3000);
