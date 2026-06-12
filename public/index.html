@@ -156,13 +156,11 @@
             btn.textContent = authMode === 'login' ? 'Authenticating...' : 'Creating Account...';
             msgEl.textContent = '';
 
-            // Send as URL-encoded so Vercel body parser can read req.body
+            // Send pure JSON so Vercel auto-parses req.body properly
             const endpoint = authMode === 'login' ? '/api/login' : '/api/register';
-            const body = new URLSearchParams();
-            body.append('username', username);
-            body.append('password', password);
+            const body = JSON.stringify({ username, password });
 
-            fetch(endpoint, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+            fetch(endpoint, { method: 'POST', body, headers: { 'Content-Type': 'application/json' } })
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
