@@ -10,11 +10,16 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'POST only' });
 
-  const { username = '', password = '' } = req.body ?? {};
+  let body = req.body ?? {};
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch (e) { }
+  }
+
+  const { username = '', password = '' } = body;
   const clean = username.replace(/[^a-zA-Z0-9-]/g, '').trim();
 
   if (!clean || !password) {
-    return res.status(400).json({ success: false, message: 'Username and password required' });
+    return res.status(400).json({ success: false, message: `Username and password required. Debug info: typeof body=${typeof req.body}, bodyKeys=${Object.keys(body).join(',')}` });
   }
 
   try {
