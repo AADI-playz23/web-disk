@@ -14,7 +14,12 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).send('POST only');
 
-  const { username: rawUser, site_id: rawSite, action = 'launch', password = '' } = req.body ?? {};
+  let body = req.body ?? {};
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch (e) { }
+  }
+
+  const { username: rawUser, site_id: rawSite, action = 'launch', password = '' } = body;
   const username = (rawUser ?? '').replace(/[^a-zA-Z0-9-]/g, '').trim();
   const site_id  = parseInt(rawSite, 10);
   const key      = `${username}_${site_id}`;
