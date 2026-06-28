@@ -1,10 +1,7 @@
-// ── POST /api/dashboard ──
-// Launch or delete a slot. Replaces dashboard.php.
-// Actions: launch (default) | delete
-
 import { d1QueryOne, d1Run } from './_lib/d1.js';
 import { redisCmd, redisParseHash } from './_lib/redis.js';
 import { getPlanLimits, getWeeklyUsage } from './_lib/plans.js';
+import { requireAuth } from './_lib/middleware.js';
 
 const GITHUB_TOKEN  = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER  = process.env.GITHUB_OWNER;
@@ -14,17 +11,21 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).send('POST only');
 
+  const user = requireAuth(req, res);
+  if (!user) return;
+
+  const username = user.username;
+
   let body = req.body ?? {};
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch (e) { }
   }
 
-  const { username: rawUser, site_id: rawSite, action = 'launch', password = '' } = body;
-  const username = (rawUser ?? '').replace(/[^a-zA-Z0-9-]/g, '').trim();
+  const { site_id: rawSite, action = 'launch', password = '' } = body;
   const site_id  = parseInt(rawSite, 10);
   const key      = `${username}_${site_id}`;
 
-  if (!username || !site_id) return res.status(400).send('Error: Missing params');
+  if (!site_id) return res.status(400).send('Error: Missing params');
 
   try {
     // ═══ LAUNCH ═══
@@ -32,7 +33,17 @@ export default async function handler(req, res) {
       if (!password) return res.status(400).send('Error: Password required');
 
       // 1. Fetch plan from D1
-      const row  = await d1QueryOne('SELECT plan FROM users WHERE username = ?', [username]);
+      const row  = await d1QueryOne('SELECT plan, locked_until FROM users WHERE username = ?', [username]);
+      if (row) {
+        const isBanned = await d1QueryOne('SELECT id FROM bans WHERE username = ? AND service = ?', [username, 'webdisk']);
+        if (isBanned) {
+          return res.status(403).send('Error: Your account is permanently banned from this service.');
+        }
+        const lockedUntil = parseInt(row.locked_until || 0);
+        if (lockedUntil > Math.floor(Date.now() / 1000)) {
+          return res.status(403).send('Error: Your account is temporarily locked for 24 hours for policy violations.');
+        }
+      }
       const plan = row?.plan ?? 'starter';
 
       // 2. Check weekly quota
