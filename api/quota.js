@@ -5,15 +5,19 @@
 import { d1QueryOne } from './_lib/d1.js';
 import { redisCmd, redisParseHash } from './_lib/redis.js';
 import { getPlanLimits, getWeeklyUsage } from './_lib/plans.js';
+import { requireAuth } from './_lib/middleware.js';
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
 
-  const username = (req.query.username ?? '').replace(/[^a-zA-Z0-9-]/g, '');
+  const user = requireAuth(req, res);
+  if (!user) return;
+
+  const username = user.username;
   const site_id  = parseInt(req.query.site_id, 10);
 
-  if (!username || !site_id) return res.status(400).json({ error: 'Missing params' });
+  if (!site_id) return res.status(400).json({ error: 'Missing params' });
 
   const key = `${username}_${site_id}`;
   const now = Math.floor(Date.now() / 1000);
