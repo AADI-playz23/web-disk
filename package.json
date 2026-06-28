@@ -10,7 +10,9 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "formidable": "^3.5.1",
-    "@google/generative-ai": "^0.21.0"
+    "@google/generative-ai": "^0.21.0",
+    "cookie": "^0.6.0",
+    "jsonwebtoken": "^9.0.2"
   },
   "scripts": {
     "dev": "vercel dev",
