@@ -80,6 +80,17 @@
         .ai-icon { font-size:2rem; color:var(--primary); animation: scanPulse 1.5s infinite; }
         @keyframes scanPulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.6;transform:scale(1.1);} }
         .ai-label { color:var(--muted); font-size:0.85rem; margin-top:8px; }
+
+        @media (max-width: 600px) {
+            .hero { margin-top: 20px; padding: 0 10px; }
+            h1.title { font-size: 2rem; }
+            .top-controls { gap: 10px; width: 100%; }
+            .ctrl-btn { flex: 1; padding: 10px; font-size: 0.78rem; text-align: center; }
+            .slot-card { padding: 20px; border-radius: 16px; }
+            #viewBilling { padding: 24px 16px; border-radius: 16px; }
+            .upi-box { font-size: 1rem; padding: 10px; }
+            .weekly-summary { padding: 16px; border-radius: 12px; }
+        }
     </style>
 </head>
 <body>
