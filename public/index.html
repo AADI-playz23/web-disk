@@ -37,6 +37,13 @@
         .auth-msg { font-size: 0.85rem; margin-top: 12px; font-weight: 600; min-height: 20px; }
         .auth-msg.success { color: var(--succ); }
         .auth-msg.error { color: var(--danger); }
+
+        @media (max-width: 650px) {
+            .hero { margin-top: 40px; }
+            h1.brand { font-size: 2.5rem; }
+            #viewLogin { margin-top: 30px; }
+            #viewLogin > div { padding: 25px 20px !important; border-radius: 16px !important; }
+        }
     </style>
 </head>
 <body>
@@ -161,7 +168,18 @@
             const body = JSON.stringify({ username, password });
 
             fetch(endpoint, { method: 'POST', body, headers: { 'Content-Type': 'application/json' } })
-            .then(r => r.json())
+            .then(res => {
+                if (res.status === 403) {
+                    return res.json().then(data => {
+                        if (data.status === 'locked') {
+                            showLockout(data);
+                            throw new Error('locked');
+                        }
+                        throw new Error(data.message || 'Access Forbidden');
+                    });
+                }
+                return res.json();
+            })
             .then(data => {
                 if (data.success) {
                     if (authMode === 'register') {
@@ -182,13 +200,91 @@
                     btn.textContent = authMode === 'login' ? 'Initialize Session' : 'Create Account';
                 }
             })
-            .catch(() => {
-                msgEl.textContent = 'Connection error. Try again.';
-                msgEl.className = 'auth-msg error';
+            .catch((err) => {
+                if (err.message !== 'locked') {
+                    msgEl.textContent = err.message || 'Connection error. Try again.';
+                    msgEl.className = 'auth-msg error';
+                }
                 btn.disabled = false;
                 btn.textContent = authMode === 'login' ? 'Initialize Session' : 'Create Account';
             });
         }
+
+        let lockInterval = null;
+        function showLockout(data) {
+            document.getElementById('lockoutReason').textContent = data.reason || 'Policy abuse';
+            const proofImg = document.getElementById('lockoutProofImage');
+            const proofLink = document.getElementById('lockoutProofLink');
+            const proofContainer = document.getElementById('lockoutProofContainer');
+
+            if (data.proof) {
+                proofContainer.style.display = 'block';
+                if (data.proof.match(/\.(png|jpg|jpeg|gif)$/i) || data.proof.includes('forensics/')) {
+                    proofImg.src = data.proof;
+                    proofImg.style.display = 'block';
+                    proofLink.style.display = 'none';
+                } else {
+                    proofLink.href = data.proof;
+                    proofLink.style.display = 'inline-block';
+                    proofImg.style.display = 'none';
+                }
+            } else {
+                proofContainer.style.display = 'none';
+            }
+
+            document.getElementById('lockoutModal').style.display = 'flex';
+
+            if (lockInterval) clearInterval(lockInterval);
+
+            const updateTimer = () => {
+                const now = Math.floor(Date.now() / 1000);
+                const diff = data.locked_until - now;
+                if (diff <= 0) {
+                    document.getElementById('lockoutTimer').textContent = 'Unlocked! Please refresh.';
+                    clearInterval(lockInterval);
+                } else {
+                    const hrs = Math.floor(diff / 3600);
+                    const mins = Math.floor((diff % 3600) / 60);
+                    const secs = diff % 60;
+                    document.getElementById('lockoutTimer').textContent = 
+                        `${String(hrs).padStart(2,'0')}:${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+                }
+            };
+            updateTimer();
+            lockInterval = setInterval(updateTimer, 1000);
+        }
+
+        function closeLockoutModal() {
+            document.getElementById('lockoutModal').style.display = 'none';
+            if (lockInterval) clearInterval(lockInterval);
+        }
     </script>
+
+    <!-- WARNING LOCKOUT MODAL -->
+    <div id="lockoutModal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(3,7,18,0.96); z-index:9999; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;">
+        <div style="background:var(--card); border:1px solid var(--danger); border-radius:20px; max-width:500px; width:100%; padding:35px; box-sizing:border-box; text-align:center; box-shadow:0 0 35px rgba(239,68,68,0.2);">
+            <div style="font-size:3.2rem; color:var(--danger); margin-bottom:15px;"><i class="fas fa-triangle-exclamation"></i></div>
+            <h2 style="margin-top:0; font-size:1.6rem; font-weight:800; letter-spacing:-0.5px;">Session Suspended</h2>
+            <p style="color:var(--muted); font-size:0.9rem; margin-bottom:20px; line-height:1.5;">This account has been locked for 24 hours due to an automated policy violation detection.</p>
+            
+            <div style="background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:12px; padding:15px; text-align:left; margin-bottom:15px;">
+                <div style="font-size:0.75rem; text-transform:uppercase; color:var(--danger); font-weight:800; margin-bottom:4px; letter-spacing:0.5px;">Violation Signature</div>
+                <div id="lockoutReason" style="font-size:0.9rem; color:#fff; font-weight:500; word-break:break-word;">...</div>
+            </div>
+
+            <div id="lockoutProofContainer" style="display:none; background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:12px; padding:15px; text-align:left; margin-bottom:15px;">
+                <div style="font-size:0.75rem; text-transform:uppercase; color:var(--primary); font-weight:800; margin-bottom:8px; letter-spacing:0.5px;">Forensic Report</div>
+                <img id="lockoutProofImage" src="" alt="Forensic Screenshot" style="width:100%; border-radius:8px; border:1px solid var(--border); display:none; max-height:180px; object-fit:cover;" />
+                <a id="lockoutProofLink" href="" target="_blank" style="color:var(--primary); font-size:0.85rem; text-decoration:none; display:none; font-weight:600;"><i class="fas fa-file-invoice"></i> View Forensic Evidence Log</a>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.85rem; color:var(--muted); margin-bottom:25px; border-top:1px solid var(--border); padding-top:15px;">
+                <div>Unlocks: <span id="lockoutTimer" style="color:#fff; font-weight:700;">--:--:--</span></div>
+                <div>Support: <a href="http://absoracloud.fanclub.rocks" target="_blank" style="color:var(--primary); text-decoration:none; font-weight:700;">Get Support</a></div>
+            </div>
+            
+            <button class="btn btn-outline" onclick="closeLockoutModal()">Close Alert</button>
+        </div>
+    </div>
 </body>
 </html>
