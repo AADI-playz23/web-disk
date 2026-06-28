@@ -14,15 +14,64 @@ export default async function handler(req, res) {
   try {
     await d1Query(`
       CREATE TABLE IF NOT EXISTS users (
-        id       INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL,
-        plan     TEXT NOT NULL DEFAULT 'starter'
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        username     TEXT NOT NULL UNIQUE,
+        password     TEXT NOT NULL,
+        plan         TEXT NOT NULL DEFAULT 'starter',
+        tos_accepted INTEGER DEFAULT 1,
+        banned       INTEGER DEFAULT 0,
+        locked_until INTEGER DEFAULT 0
       )
     `);
+    
+    // Migration: add columns to existing users table if they exist but are missing columns
+    try {
+      await d1Query(`ALTER TABLE users ADD COLUMN tos_accepted INTEGER DEFAULT 1`);
+    } catch (e) {}
+    try {
+      await d1Query(`ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0`);
+    } catch (e) {}
+    try {
+      await d1Query(`ALTER TABLE users ADD COLUMN locked_until INTEGER DEFAULT 0`);
+    } catch (e) {}
+    
     results.push({ step: 'users table', ok: true });
   } catch (err) {
     results.push({ step: 'users table', ok: false, error: err.message });
+  }
+
+  // ── 1b. Create warns table ──
+  try {
+    await d1Query(`
+      CREATE TABLE IF NOT EXISTS warns (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        username         TEXT NOT NULL,
+        service          TEXT NOT NULL,
+        reason           TEXT NOT NULL,
+        screenshot_proof TEXT,
+        created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    results.push({ step: 'warns table', ok: true });
+  } catch (err) {
+    results.push({ step: 'warns table', ok: false, error: err.message });
+  }
+
+  // ── 1c. Create bans table ──
+  try {
+    await d1Query(`
+      CREATE TABLE IF NOT EXISTS bans (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        username    TEXT NOT NULL,
+        service     TEXT NOT NULL,
+        reason      TEXT NOT NULL,
+        banned_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(username, service)
+      )
+    `);
+    results.push({ step: 'bans table', ok: true });
+  } catch (err) {
+    results.push({ step: 'bans table', ok: false, error: err.message });
   }
 
   // ── 2. Create slots table ──
