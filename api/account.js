@@ -5,15 +5,16 @@
 import { d1QueryOne } from './_lib/d1.js';
 import { redisCmd, redisParseHash } from './_lib/redis.js';
 import { getSlotsForPlan, getPlanLimits, getWeeklyUsage } from './_lib/plans.js';
+import { requireAuth } from './_lib/middleware.js';
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
 
-  const username = (req.query.username ?? '').replace(/[^a-zA-Z0-9-]/g, '');
-  if (!username) {
-    return res.status(200).json({ plan: 'starter', slots: 1 });
-  }
+  const user = requireAuth(req, res);
+  if (!user) return;
+
+  const username = user.username;
 
   try {
     const row  = await d1QueryOne('SELECT plan FROM users WHERE username = ?', [username]);
