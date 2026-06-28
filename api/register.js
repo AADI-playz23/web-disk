@@ -14,8 +14,15 @@ export default async function handler(req, res) {
     try { body = JSON.parse(body); } catch (e) { }
   }
 
-  const { username = '', password = '' } = body;
+  const { username = '', password = '', tos = false } = body;
   const clean = username.replace(/[^a-zA-Z0-9-]/g, '').trim();
+
+  if (!tos) {
+    return res.status(400).json({
+      success: false,
+      message: 'You must agree to the Terms of Service, Privacy Policy, and Refund Policy.',
+    });
+  }
 
   if (clean.length < 3 || password.length < 4) {
     return res.status(400).json({
@@ -37,7 +44,7 @@ export default async function handler(req, res) {
     // Hash password and insert
     const hashed = await bcrypt.hash(password, 10);
     await d1Run(
-      "INSERT INTO users (username, password, plan) VALUES (?, ?, 'starter')",
+      "INSERT INTO users (username, password, plan, tos_accepted) VALUES (?, ?, 'starter', 1)",
       [clean, hashed]
     );
 
