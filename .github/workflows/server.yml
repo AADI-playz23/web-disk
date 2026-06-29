@@ -54,85 +54,8 @@ jobs:
           echo "✅ Runner $RUNNER_ID registered in Redis"
 
       - name: 2. Multi-Tenant Host Loop
-        run: |
-          cd storage_env
-
-          # ── REDIS HELPER ──
-          redis_cmd() {
-            curl -s "$REDIS_URL" \
-              -H "Authorization: Bearer $REDIS_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "$1"
-          }
-
-          redis_result() {
-            local RES=$(redis_cmd "$1")
-            echo "$RES" | jq -r '.result // empty' 2>/dev/null
-          }
-
-          # ── STATE TRACKING ──
-          declare -A USER_PHP_PID
-          declare -A USER_NODE_PID
-          declare -A USER_TUNNEL_PID
-          declare -A USER_PORT
-          declare -A USER_SESSION_START
-          declare -A USER_SESSION_LIMIT
-          declare -A USER_PLAN
-
-
-          NEXT_PORT=8080
-          ACTIVE_COUNT=0
-          EMPTY_CYCLES=0
-          MAX_EMPTY_CYCLES=10
-          START_TIME=$(date +%s)
-          MAX_RUNTIME=21000
-          GIT_SYNC_COUNTER=0
-
-
-          # ── DEPLOY A USER ──
-          deploy_user() {
-            local DATA="$1"
-            local USERNAME=$(echo "$DATA" | jq -r '.username')
-            local PASSWORD=$(echo "$DATA" | jq -r '.password')
-            local SITE_ID=$(echo "$DATA" | jq -r '.site_id')
-            local PLAN=$(echo "$DATA" | jq -r '.plan')
-            local SESSION_LIMIT=$(echo "$DATA" | jq -r '.session_limit')
-            local KEY="${USERNAME}_${SITE_ID}"
-
-            echo "┌──────────────────────────────────────────┐"
-            echo "│ 📦 DEPLOYING: $KEY (plan: $PLAN)         │"
-            echo "└──────────────────────────────────────────┘"
-
-            if [ -n "${USER_PHP_PID[$KEY]+x}" ]; then
-              echo "⚠️  $KEY already hosted, skipping"
-              return
-            fi
-
-            if [ $ACTIVE_COUNT -ge 10 ]; then
-              echo "❌ Runner at capacity (10/10), re-queuing $KEY"
-              redis_cmd "[\"LPUSH\", \"queue:deploy\", $(echo "$DATA" | jq -c '.' | jq -Rs '.')]" > /dev/null
-              return
-            fi
-
-            local PORT=$NEXT_PORT
-            NEXT_PORT=$((NEXT_PORT + 1))
-
-            # Setup user directory
-            local USER_DIR="users/$USERNAME/$SITE_ID"
-            mkdir -p "$USER_DIR"
-
-            if [ ! -f "$USER_DIR/index.html" ]; then
-              echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#030712;color:#fff;'><h1>🚀 Absora Instance $SITE_ID Live</h1></body></html>" > "$USER_DIR/index.html"
-            fi
-
-            # Storage quotas
-            local MAX_BYTES=524288000
-            if [ "$PLAN" == "developer" ]; then MAX_BYTES=53687091200; fi
-            if [ "$PLAN" == "professional" ]; then MAX_BYTES=214748364800; fi
-            if [ "$PLAN" == "studio" ]; then MAX_BYTES=1099511627776; fi
-
-            # Inject upload.php
-            cat <<'UPLOAD_EOF' > "$USER_DIR/upload.php"
+        env:
+          UPLOAD_PHP_CONTENT: |
             <?php
             session_start();
             $USERNAME = "%%USERNAME%%";
@@ -682,16 +605,7 @@ jobs:
                 </script>
             </body>
             </html>
-            UPLOAD_EOF
-
-            sed -i "s/%%USERNAME%%/$USERNAME/g" "$USER_DIR/upload.php"
-            sed -i "s/%%SITE_ID%%/$SITE_ID/g" "$USER_DIR/upload.php"
-            sed -i "s/%%PLAN%%/$PLAN/g" "$USER_DIR/upload.php"
-            sed -i "s/%%PASSWORD%%/$PASSWORD/g" "$USER_DIR/upload.php"
-            sed -i "s/%%MAX_BYTES%%/$MAX_BYTES/g" "$USER_DIR/upload.php"
-
-            # Write Professional Node Engine Server
-            cat <<'SERVER_MJS_EOF' > "$USER_DIR/server.mjs"
+          SERVER_MJS_CONTENT: |
             import http from 'http';
             import fs from 'fs';
             import path from 'path';
@@ -851,7 +765,92 @@ jobs:
             server.listen(PORT, () => {
                 console.log(`[Server] Professional Engine running on port ${PORT}`);
             });
-            SERVER_MJS_EOF
+        run: |
+          cd storage_env
+
+          # ── REDIS HELPER ──
+          redis_cmd() {
+            curl -s "$REDIS_URL" \
+              -H "Authorization: Bearer $REDIS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$1"
+          }
+
+          redis_result() {
+            local RES=$(redis_cmd "$1")
+            echo "$RES" | jq -r '.result // empty' 2>/dev/null
+          }
+
+          # ── STATE TRACKING ──
+          declare -A USER_PHP_PID
+          declare -A USER_NODE_PID
+          declare -A USER_TUNNEL_PID
+          declare -A USER_PORT
+          declare -A USER_SESSION_START
+          declare -A USER_SESSION_LIMIT
+          declare -A USER_PLAN
+
+
+          NEXT_PORT=8080
+          ACTIVE_COUNT=0
+          EMPTY_CYCLES=0
+          MAX_EMPTY_CYCLES=10
+          START_TIME=$(date +%s)
+          MAX_RUNTIME=21000
+          GIT_SYNC_COUNTER=0
+
+
+          # ── DEPLOY A USER ──
+          deploy_user() {
+            local DATA="$1"
+            local USERNAME=$(echo "$DATA" | jq -r '.username')
+            local PASSWORD=$(echo "$DATA" | jq -r '.password')
+            local SITE_ID=$(echo "$DATA" | jq -r '.site_id')
+            local PLAN=$(echo "$DATA" | jq -r '.plan')
+            local SESSION_LIMIT=$(echo "$DATA" | jq -r '.session_limit')
+            local KEY="${USERNAME}_${SITE_ID}"
+
+            echo "┌──────────────────────────────────────────┐"
+            echo "│ 📦 DEPLOYING: $KEY (plan: $PLAN)         │"
+            echo "└──────────────────────────────────────────┘"
+
+            if [ -n "${USER_PHP_PID[$KEY]+x}" ]; then
+              echo "⚠️  $KEY already hosted, skipping"
+              return
+            fi
+
+            if [ $ACTIVE_COUNT -ge 10 ]; then
+              echo "❌ Runner at capacity (10/10), re-queuing $KEY"
+              redis_cmd "[\"LPUSH\", \"queue:deploy\", $(echo "$DATA" | jq -c '.' | jq -Rs '.')]" > /dev/null
+              return
+            fi
+
+            local PORT=$NEXT_PORT
+            NEXT_PORT=$((NEXT_PORT + 1))
+
+            # Setup user directory
+            local USER_DIR="users/$USERNAME/$SITE_ID"
+            mkdir -p "$USER_DIR"
+
+            if [ ! -f "$USER_DIR/index.html" ]; then
+              echo "<html><body style='font-family:sans-serif;text-align:center;padding:50px;background:#030712;color:#fff;'><h1>🚀 Absora Instance $SITE_ID Live</h1></body></html>" > "$USER_DIR/index.html"
+            fi
+
+            # Storage quotas
+            local MAX_BYTES=524288000
+            if [ "$PLAN" == "developer" ]; then MAX_BYTES=53687091200; fi
+            if [ "$PLAN" == "professional" ]; then MAX_BYTES=214748364800; fi
+            if [ "$PLAN" == "studio" ]; then MAX_BYTES=1099511627776; fi
+
+            # Deploy upload.php and server.mjs using python from env variables
+            python3 -c "import os; open('$USER_DIR/upload.php', 'w', encoding='utf-8').write(os.environ['UPLOAD_PHP_CONTENT'])"
+            python3 -c "import os; open('$USER_DIR/server.mjs', 'w', encoding='utf-8').write(os.environ['SERVER_MJS_CONTENT'])"
+
+            sed -i "s/%%USERNAME%%/$USERNAME/g" "$USER_DIR/upload.php"
+            sed -i "s/%%SITE_ID%%/$SITE_ID/g" "$USER_DIR/upload.php"
+            sed -i "s/%%PLAN%%/$PLAN/g" "$USER_DIR/upload.php"
+            sed -i "s/%%PASSWORD%%/$PASSWORD/g" "$USER_DIR/upload.php"
+            sed -i "s/%%MAX_BYTES%%/$MAX_BYTES/g" "$USER_DIR/upload.php"
 
             # ── BUILD NODE PROJECTS ──
             if [ -f "$USER_DIR/package.json" ]; then
@@ -1040,7 +1039,7 @@ jobs:
               if [ $SESSION_ELAPSED -ge $LIMIT ]; then
                 KEYS_TO_EXPIRE+=("$KEY")
               fi
-               if ! kill -0 "${USER_NODE_PID[$KEY]}" 2>/dev/null; then
+              if ! kill -0 "${USER_NODE_PID[$KEY]}" 2>/dev/null; then
                 echo "⚠️  Node process for $KEY died unexpectedly"
                 KEYS_TO_EXPIRE+=("$KEY")
               fi
