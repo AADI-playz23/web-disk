@@ -133,70 +133,556 @@ jobs:
 
             # Inject upload.php
             cat <<'UPLOAD_EOF' > "$USER_DIR/upload.php"
-          <?php
-          session_start();
-          $USERNAME = "%%USERNAME%%";
-          $SITE_ID = "%%SITE_ID%%";
-          $PLAN = "%%PLAN%%";
-          $max_bytes = %%MAX_BYTES%%;
+<?php
+session_start();
+$USERNAME = "%%USERNAME%%";
+$SITE_ID = "%%SITE_ID%%";
+$PLAN = "%%PLAN%%";
+$max_bytes = %%MAX_BYTES%%;
+$CORRECT_PASSWORD = "%%PASSWORD%%";
 
-          function getDirSize($dir) {
-              $size = 0;
-              foreach (glob(rtrim($dir, '/').'/*', GLOB_NOSORT) as $each) {
-                  $size += is_file($each) ? filesize($each) : getDirSize($each);
-              }
-              return $size;
-          }
+function getDirSize($dir) {
+    $size = 0;
+    foreach (glob(rtrim($dir, '/').'/*', GLOB_NOSORT) as $each) {
+        $size += is_file($each) ? filesize($each) : getDirSize($each);
+    }
+    return $size;
+}
 
-          $CORRECT_PASSWORD = "%%PASSWORD%%";
+if (isset($_POST['username']) && isset($_POST['password'])) {
+    if ($_POST['username'] === $USERNAME && $_POST['password'] === $CORRECT_PASSWORD) $_SESSION['logged_in'] = true;
+}
+if (isset($_GET['logout'])) { session_destroy(); header("Location: upload.php"); exit; }
 
-          if (isset($_POST['username']) && isset($_POST['password'])) {
-              if ($_POST['username'] === $USERNAME && $_POST['password'] === $CORRECT_PASSWORD) $_SESSION['logged_in'] = true;
-          }
-          if (isset($_GET['logout'])) { session_destroy(); header("Location: upload.php"); exit; }
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    echo '<!DOCTYPE html><html><body style="background:#030712;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;"><div style="background:#111827;padding:40px;border-radius:24px;text-align:center;width:320px;border:1px solid #1f2937;"><h2 style="margin-top:0;color:#3b82f6;">Unlock WebHost</h2><form method="POST"><input type="text" name="username" placeholder="Username" style="width:100%;padding:14px;margin-bottom:15px;border-radius:12px;border:1px solid #1f2937;background:#030712;color:#fff;box-sizing:border-box;" required><input type="password" name="password" placeholder="Password" style="width:100%;padding:14px;margin-bottom:15px;border-radius:12px;border:1px solid #1f2937;background:#030712;color:#fff;box-sizing:border-box;" required><button type="submit" style="width:100%;padding:14px;background:#3b82f6;color:#fff;border:none;border-radius:12px;font-weight:bold;cursor:pointer;transition:0.2s;">Unlock Control Panel</button></form></div></body></html>';
+    exit;
+}
 
-          if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
-              echo '<!DOCTYPE html><html><body style="background:#030712;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;"><div style="background:#111827;padding:40px;border-radius:24px;text-align:center;"><form method="POST"><input type="text" name="username" placeholder="Username" style="width:100%;padding:14px;margin-bottom:15px;border-radius:12px;border:1px solid #1f2937;background:#030712;color:#fff;" required><input type="password" name="password" placeholder="Password" style="width:100%;padding:14px;margin-bottom:15px;border-radius:12px;border:1px solid #1f2937;background:#030712;color:#fff;" required><button type="submit" style="width:100%;padding:14px;background:#3b82f6;color:#fff;border:none;border-radius:12px;font-weight:bold;cursor:pointer;">Unlock Instance</button></form></div></body></html>';
-              exit;
-          }
+$root_dir = realpath('.');
+$rel_path = isset($_GET['dir']) ? trim($_GET['dir'], '/') : '';
+$current_dir = $root_dir;
+if ($rel_path !== '') {
+    $test_dir = realpath($root_dir . '/' . $rel_path);
+    if ($test_dir && strpos($test_dir, $root_dir) === 0 && is_dir($test_dir)) {
+        $current_dir = $test_dir;
+    } else {
+        $rel_path = '';
+    }
+}
 
-          if (isset($_FILES['file'])) {
-              $current_size = getDirSize('.');
-              $fname = basename($_FILES['file']['name']);
-              $ext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
-              $blocked = ['php', 'sh', 'py', 'cgi', 'htaccess'];
+// Helper function to recursively delete directories
+function deleteRecursive($dir) {
+    if (!file_exists($dir)) return true;
+    if (!is_dir($dir)) return unlink($dir);
+    foreach (scandir($dir) as $item) {
+        if ($item == '.' || $item == '..') continue;
+        if (!deleteRecursive($dir . DIRECTORY_SEPARATOR . $item)) return false;
+    }
+    return rmdir($dir);
+}
 
-              if(in_array($ext, $blocked)) {
-                  $upload_error = "Security Block: Executables prohibited.";
-              } else if ($current_size + $_FILES['file']['size'] > $max_bytes) {
-                  $upload_error = "STORAGE LIMIT EXCEEDED: Your $PLAN plan is out of space.";
-              } else {
-                  move_uploaded_file($_FILES['file']['tmp_name'], $fname);
-                  header("Location: upload.php"); exit;
-              }
-          }
+// Handle GET AJAX content reading
+if (isset($_GET['get_content'])) {
+    $file = basename($_GET['get_content']);
+    $filepath = $current_dir . '/' . $file;
+    if (file_exists($filepath) && is_file($filepath) && strpos(realpath($filepath), $root_dir) === 0) {
+        header("Content-Type: text/plain");
+        echo file_get_contents($filepath);
+        exit;
+    }
+    http_response_code(400);
+    echo "Error reading file";
+    exit;
+}
 
-          if (isset($_GET['delete'])) { $file = basename($_GET['delete']); if($file != '.' && $file != '..' && file_exists($file)) { is_dir($file) ? rmdir($file) : unlink($file); } header("Location: upload.php"); exit; }
-          function formatSize($bytes) { if ($bytes == 0) return '-'; if ($bytes >= 1048576) return number_format($bytes/1048576, 2).' MB'; return number_format($bytes/1024, 2).' KB'; }
-          $files = array_diff(scandir('.'), array('.', '..', 'upload.php'));
-          ?>
-          <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Absora Manager</title>
-          <style>body{margin:0;font-family:sans-serif;background:#030712;color:#fff;} .btn{padding:10px 20px;background:#3b82f6;color:#fff;border:none;border-radius:10px;cursor:pointer;font-weight:600;} .err-box{background:rgba(239,68,68,0.1);border:1px solid #ef4444;color:#ef4444;padding:15px;border-radius:12px;margin-bottom:20px;}</style></head><body>
-          <div style="padding:30px;">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:30px;">
-                  <h2>/public_html</h2>
-                  <form method="POST" enctype="multipart/form-data" id="uf"><input type="file" name="file" id="fi" style="display:none;" onchange="document.getElementById('uf').submit()"></form>
-                  <button class="btn" onclick="document.getElementById('fi').click()">Upload File</button>
-              </div>
-              <?php if(isset($upload_error)) echo "<div class='err-box'>$upload_error</div>"; ?>
-              <table style="width:100%;text-align:left;border-collapse:collapse;">
-              <?php foreach($files as $file) {
-                  $sz=formatSize(filesize($file));
-                  echo "<tr><td style='padding:15px;border-bottom:1px solid #1f2937;'><a href='$file' target='_blank' style='color:#fff;text-decoration:none;'>$file</a></td><td style='padding:15px;border-bottom:1px solid #1f2937;'>$sz</td><td style='text-align:right;padding:15px;border-bottom:1px solid #1f2937;'><a href='?delete=".urlencode($file)."' style='color:#9ca3af;text-decoration:none;'>Delete</a></td></tr>";
-              } ?>
-              </table>
-          </div></body></html>
-          UPLOAD_EOF
+// Handle POST actions
+if (isset($_POST['op'])) {
+    $op = $_POST['op'];
+    
+    // Save File
+    if ($op === 'save_file') {
+        $file = basename($_POST['file']);
+        $content = $_POST['content'];
+        $filepath = $current_dir . '/' . $file;
+        if (file_exists($filepath) && is_file($filepath) && strpos(realpath($filepath), $root_dir) === 0) {
+            file_put_contents($filepath, $content);
+            echo json_encode(["status" => "success"]);
+        } else {
+            echo json_encode(["status" => "error", "message" => "File not found"]);
+        }
+        exit;
+    }
+    
+    // Create File
+    if ($op === 'new_file') {
+        $name = basename($_POST['name']);
+        if ($name !== '') {
+            $path = $current_dir . '/' . $name;
+            if (!file_exists($path)) {
+                file_put_contents($path, '');
+            }
+        }
+        header("Location: upload.php?dir=" . urlencode($rel_path));
+        exit;
+    }
+    
+    // Create Folder
+    if ($op === 'new_folder') {
+        $name = basename($_POST['name']);
+        if ($name !== '') {
+            $path = $current_dir . '/' . $name;
+            if (!file_exists($path)) {
+                mkdir($path, 0755, true);
+            }
+        }
+        header("Location: upload.php?dir=" . urlencode($rel_path));
+        exit;
+    }
+    
+    // Rename
+    if ($op === 'rename') {
+        $old = basename($_POST['old_name']);
+        $new = basename($_POST['new_name']);
+        if ($old !== '' && $new !== '') {
+            $oldpath = $current_dir . '/' . $old;
+            $newpath = $current_dir . '/' . $new;
+            if (file_exists($oldpath) && !file_exists($newpath) && strpos(realpath($oldpath), $root_dir) === 0) {
+                rename($oldpath, $newpath);
+            }
+        }
+        header("Location: upload.php?dir=" . urlencode($rel_path));
+        exit;
+    }
+}
+
+// Handle Delete
+if (isset($_GET['delete'])) {
+    $target = basename($_GET['delete']);
+    if ($target !== '' && $target !== 'upload.php' && $target !== 'server.mjs') {
+        $target_path = $current_dir . '/' . $target;
+        if (file_exists($target_path) && strpos(realpath($target_path), $root_dir) === 0) {
+            deleteRecursive($target_path);
+        }
+    }
+    header("Location: upload.php?dir=" . urlencode($rel_path));
+    exit;
+}
+
+// Handle Upload
+if (isset($_FILES['file'])) {
+    $current_size = getDirSize($root_dir);
+    $fname = basename($_FILES['file']['name']);
+    $ext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
+    $blocked = ['sh', 'py', 'cgi', 'htaccess'];
+    
+    if (in_array($ext, $blocked)) {
+        $upload_error = "Security Block: Executables prohibited.";
+    } else if ($current_size + $_FILES['file']['size'] > $max_bytes) {
+        $upload_error = "STORAGE LIMIT EXCEEDED: Your $PLAN plan is out of space.";
+    } else {
+        move_uploaded_file($_FILES['file']['tmp_name'], $current_dir . '/' . $fname);
+        header("Location: upload.php?dir=" . urlencode($rel_path));
+        exit;
+    }
+}
+
+function formatSize($bytes) {
+    if ($bytes == 0) return '-';
+    if ($bytes >= 1048576) return number_format($bytes/1048576, 2).' MB';
+    return number_format($bytes/1024, 2).' KB';
+}
+
+$items = array_diff(scandir($current_dir), array('.', '..', 'upload.php', 'server.mjs'));
+$folders = [];
+$files = [];
+foreach ($items as $item) {
+    $path = $current_dir . '/' . $item;
+    if (is_dir($path)) {
+        $folders[] = $item;
+    } else {
+        $files[] = $item;
+    }
+}
+sort($folders);
+sort($files);
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Absora Pro Manager</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-main: #020205;
+            --bg-panel: #0a0a12;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --accent: #8b5cf6;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --border: #1e1e2e;
+        }
+        body {
+            margin: 0;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-main);
+            color: var(--text-main);
+        }
+        .header {
+            background: rgba(2, 2, 5, 0.8);
+            backdrop-filter: blur(12px);
+            padding: 1.2rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .panel {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: var(--bg-panel);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+            transition: 0.2s;
+            color: white;
+            font-family: inherit;
+        }
+        .btn-p { background: var(--accent); }
+        .btn-s { background: var(--success); }
+        .btn-d { background: var(--danger); }
+        .btn-w { background: var(--warning); }
+        .btn-neutral { background: #1e1e2e; border: 1px solid #334155; }
+        
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+        .breadcrumbs {
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+        .breadcrumbs a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        th, td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+        }
+        tr:hover {
+            background: rgba(255,255,255,0.02);
+        }
+        .item-link {
+            color: #fff;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .action-link {
+            color: var(--text-muted);
+            text-decoration: none;
+            margin-left: 12px;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .action-link:hover { color: var(--accent); }
+        .action-link.delete:hover { color: var(--danger); }
+        
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            padding: 2rem;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 500px;
+        }
+        .modal-content.editor-content {
+            max-width: 900px;
+            height: 80%;
+            display: flex;
+            flex-direction: column;
+        }
+        .editor-textarea {
+            flex-grow: 1;
+            width: 100%;
+            background: #020205;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: #10b981;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            padding: 1rem;
+            box-sizing: border-box;
+            resize: none;
+            outline: none;
+            margin: 1rem 0;
+        }
+        .input-text {
+            width: 100%;
+            padding: 0.8rem;
+            background: #020205;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: white;
+            margin: 1rem 0;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2 style="margin:0;color:var(--accent);">Absora Pro Manager</h2>
+        <a href="?logout=1" class="btn btn-d">Logout</a>
+    </div>
+    
+    <div class="panel">
+        <div class="breadcrumbs">
+            📁 <a href="upload.php">root</a>
+            <?php
+            if ($rel_path !== '') {
+                $parts = explode('/', $rel_path);
+                $accum = '';
+                foreach ($parts as $p) {
+                    $accum .= ($accum === '' ? '' : '/') . $p;
+                    echo " / <a href='upload.php?dir=" . urlencode($accum) . "'>$p</a>";
+                }
+            }
+            ?>
+        </div>
+        
+        <div class="toolbar">
+            <button class="btn btn-p" onclick="document.getElementById('fi').click()">Upload File</button>
+            <button class="btn btn-neutral" onclick="openCreateModal('file')">+ New File</button>
+            <button class="btn btn-neutral" onclick="openCreateModal('folder')">+ New Folder</button>
+            
+            <form method="POST" enctype="multipart/form-data" id="uf" style="display:none;">
+                <input type="file" name="file" id="fi" onchange="document.getElementById('uf').submit()">
+            </form>
+        </div>
+        
+        <?php if(isset($upload_error)) echo "<div class='btn btn-d' style='display:block;margin-bottom:1rem;'>$upload_error</div>"; ?>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Size</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if ($rel_path !== ''): 
+                    $parent = dirname($rel_path);
+                    if ($parent === '.' || $parent === '/' || $parent === '\\') $parent = '';
+                ?>
+                <tr>
+                    <td colspan="3">
+                        <a href="upload.php?dir=<?php echo urlencode($parent); ?>" class="item-link" style="color:var(--accent);">↩️ .. (Parent Directory)</a>
+                    </td>
+                </tr>
+                <?php endif; ?>
+                
+                <?php foreach ($folders as $folder): ?>
+                <tr>
+                    <td>
+                        <a href="upload.php?dir=<?php echo urlencode(($rel_path !== '' ? $rel_path . '/' : '') . $folder); ?>" class="item-link">📁 <?php echo htmlspecialchars($folder); ?></a>
+                    </td>
+                    <td>-</td>
+                    <td style="text-align:right;">
+                        <span class="action-link" onclick="openRenameModal('<?php echo htmlspecialchars($folder); ?>')">Rename</span>
+                        <a href="?dir=<?php echo urlencode($rel_path); ?>&delete=<?php echo urlencode($folder); ?>" class="action-link delete" onclick="return confirm('Delete folder <?php echo htmlspecialchars($folder); ?> and all its contents?')">Delete</a>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+                
+                <?php foreach ($files as $file): 
+                    $sz = formatSize(filesize($current_dir . '/' . $file));
+                    $is_editable = in_array(pathinfo($file, PATHINFO_EXTENSION), ['html', 'css', 'js', 'json', 'txt', 'php', 'mjs']);
+                ?>
+                <tr>
+                    <td>
+                        <a href="<?php echo htmlspecialchars(($rel_path !== '' ? $rel_path . '/' : '') . $file); ?>" target="_blank" class="item-link">📄 <?php echo htmlspecialchars($file); ?></a>
+                    </td>
+                    <td><?php echo $sz; ?></td>
+                    <td style="text-align:right;">
+                        <?php if ($is_editable): ?>
+                        <span class="action-link" onclick="openEditor('<?php echo htmlspecialchars($file); ?>')">Edit</span>
+                        <?php endif; ?>
+                        <span class="action-link" onclick="openRenameModal('<?php echo htmlspecialchars($file); ?>')">Rename</span>
+                        <a href="?dir=<?php echo urlencode($rel_path); ?>&delete=<?php echo urlencode($file); ?>" class="action-link delete" onclick="return confirm('Delete file <?php echo htmlspecialchars($file); ?>?')">Delete</a>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+                
+                <?php if (empty($folders) && empty($files)): ?>
+                <tr>
+                    <td colspan="3" style="text-align:center;color:var(--text-muted);padding:2rem;">This directory is empty.</td>
+                </tr>
+                <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Rename Modal -->
+    <div id="renameModal" class="modal">
+        <div class="modal-content">
+            <h3 style="margin-top:0;">Rename Item</h3>
+            <form method="POST">
+                <input type="hidden" name="op" value="rename">
+                <input type="hidden" id="renameOldName" name="old_name">
+                <input type="text" id="renameNewName" name="new_name" class="input-text" required>
+                <div style="display:flex;justify-content:flex-end;gap:10px;">
+                    <button type="button" class="btn btn-neutral" onclick="closeModal('renameModal')">Cancel</button>
+                    <button type="submit" class="btn btn-p">Rename</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Modal -->
+    <div id="createModal" class="modal">
+        <div class="modal-content">
+            <h3 style="margin-top:0;" id="createTitle">New Item</h3>
+            <form method="POST">
+                <input type="hidden" id="createOp" name="op" value="new_file">
+                <input type="text" name="name" class="input-text" placeholder="Name" required>
+                <div style="display:flex;justify-content:flex-end;gap:10px;">
+                    <button type="button" class="btn btn-neutral" onclick="closeModal('createModal')">Cancel</button>
+                    <button type="submit" class="btn btn-p">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- File Editor Modal -->
+    <div id="editorModal" class="modal">
+        <div class="modal-content editor-content">
+            <h3 style="margin:0;display:flex;justify-content:between;align-items:center;">
+                <span id="editorFilename">Editor</span>
+            </h3>
+            <textarea id="editorArea" class="editor-textarea"></textarea>
+            <div style="display:flex;justify-content:flex-end;gap:10px;">
+                <button type="button" class="btn btn-neutral" onclick="closeModal('editorModal')">Cancel</button>
+                <button type="button" class="btn btn-s" onclick="saveFile()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentEditFile = '';
+
+        function closeModal(id) {
+            document.getElementById(id).style.display = 'none';
+        }
+
+        function openRenameModal(name) {
+            document.getElementById('renameOldName').value = name;
+            document.getElementById('renameNewName').value = name;
+            document.getElementById('renameModal').style.display = 'flex';
+        }
+
+        function openCreateModal(type) {
+            const isFile = type === 'file';
+            document.getElementById('createTitle').innerText = isFile ? 'Create New File' : 'Create New Folder';
+            document.getElementById('createOp').value = isFile ? 'new_file' : 'new_folder';
+            document.getElementById('createModal').style.display = 'flex';
+        }
+
+        async function openEditor(filename) {
+            currentEditFile = filename;
+            document.getElementById('editorFilename').innerText = `Editing: ${filename}`;
+            document.getElementById('editorArea').value = 'Loading file contents...';
+            document.getElementById('editorModal').style.display = 'flex';
+
+            try {
+                const res = await fetch(`upload.php?dir=${encodeURIComponent('<?php echo $rel_path; ?>')}&get_content=${encodeURIComponent(filename)}`);
+                if (res.ok) {
+                    const text = await res.text();
+                    document.getElementById('editorArea').value = text;
+                } else {
+                    document.getElementById('editorArea').value = 'Error loading file contents.';
+                }
+            } catch (e) {
+                document.getElementById('editorArea').value = 'Network error.';
+            }
+        }
+
+        async function saveFile() {
+            const content = document.getElementById('editorArea').value;
+            const btn = document.querySelector('#editorModal .btn-s');
+            const originalText = btn.innerText;
+            btn.innerText = 'Saving...';
+            btn.disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('op', 'save_file');
+                formData.append('file', currentEditFile);
+                formData.append('content', content);
+
+                const res = await fetch(`upload.php?dir=${encodeURIComponent('<?php echo $rel_path; ?>')}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert('File saved successfully.');
+                    closeModal('editorModal');
+                } else {
+                    alert('Failed to save file: ' + data.message);
+                }
+            } catch (e) {
+                alert('Connection error occurred while saving.');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
+UPLOAD_EOF
 
             sed -i "s/%%USERNAME%%/$USERNAME/g" "$USER_DIR/upload.php"
             sed -i "s/%%SITE_ID%%/$SITE_ID/g" "$USER_DIR/upload.php"
