@@ -72,6 +72,7 @@ jobs:
 
           # ── STATE TRACKING ──
           declare -A USER_PHP_PID
+          declare -A USER_NODE_PID
           declare -A USER_TUNNEL_PID
           declare -A USER_PORT
           declare -A USER_SESSION_START
@@ -203,10 +204,191 @@ jobs:
             sed -i "s/%%PASSWORD%%/$PASSWORD/g" "$USER_DIR/upload.php"
             sed -i "s/%%MAX_BYTES%%/$MAX_BYTES/g" "$USER_DIR/upload.php"
 
-            # Start PHP server
-            php -S 0.0.0.0:$PORT -t "$USER_DIR" > "/tmp/${KEY}_access.log" 2>&1 &
+            # Write Professional Node Engine Server
+            cat <<'SERVER_MJS_EOF' > "$USER_DIR/server.mjs"
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { URL } from 'url';
+
+const PORT = process.env.PORT || 8080;
+const USER_DIR = process.env.USER_DIR || '.';
+
+function getStaticDir() {
+    const dirs = ['dist', 'build', 'out', 'public', '.next/out'];
+    for (const d of dirs) {
+        const fullPath = path.join(USER_DIR, d);
+        if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
+            return fullPath;
+        }
+    }
+    return USER_DIR;
+}
+
+const STATIC_DIR = getStaticDir();
+console.log(`[Server] Static files served from: ${STATIC_DIR}`);
+
+const mimeTypes = {
+    '.html': 'text/html',
+    '.css': 'text/css',
+    '.js': 'text/javascript',
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon'
+};
+
+const server = http.createServer(async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
+
+    const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+    let pathname = parsedUrl.pathname;
+
+    if (pathname.startsWith('/api/')) {
+        const apiName = pathname.slice(5);
+        const jsFile = path.join(USER_DIR, 'api', apiName.endsWith('.js') ? apiName : `${apiName}.js`);
+
+        if (fs.existsSync(jsFile)) {
+            try {
+                const modulePath = 'file://' + path.resolve(jsFile);
+                const module = await import(`${modulePath}?t=${Date.now()}`);
+                const handler = module.default || module.handler || module;
+
+                if (typeof handler === 'function') {
+                    req.query = Object.fromEntries(parsedUrl.searchParams);
+                    
+                    res.status = (code) => {
+                        res.statusCode = code;
+                        return res;
+                    };
+                    res.json = (data) => {
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify(data));
+                    };
+                    res.send = (data) => {
+                        if (typeof data === 'object') {
+                            res.json(data);
+                        } else {
+                            res.end(data);
+                        }
+                    };
+
+                    let body = '';
+                    req.on('data', chunk => { body += chunk; });
+                    req.on('end', async () => {
+                        try {
+                            if (req.headers['content-type'] === 'application/json' && body) {
+                                req.body = JSON.parse(body);
+                            } else {
+                                req.body = body;
+                            }
+                        } catch (e) {
+                            req.body = body;
+                        }
+                        
+                        try {
+                            await handler(req, res);
+                        } catch (err) {
+                            console.error(`[API Error] ${pathname}:`, err);
+                            res.writeHead(500, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ error: 'Serverless Function Execution Failed', details: err.message }));
+                        }
+                    });
+                    return;
+                }
+            } catch (err) {
+                console.error(`[API Load Error] ${pathname}:`, err);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Failed to load serverless function', details: err.message }));
+                return;
+            }
+        } else {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `API route not found: ${pathname}` }));
+            return;
+        }
+    }
+
+    if (pathname.endsWith('.php') || fs.existsSync(path.join(STATIC_DIR, pathname, 'index.php'))) {
+        const phpPort = parseInt(PORT) + 1000;
+        const targetUrl = `http://127.0.0.1:${phpPort}${req.url}`;
+        
+        const proxyReq = http.request(targetUrl, {
+            method: req.method,
+            headers: req.headers
+        }, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode, proxyRes.headers);
+            proxyRes.pipe(res, { end: true });
+        });
+        
+        proxyReq.on('error', (err) => {
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end(`PHP proxy error: ${err.message}`);
+        });
+        
+        req.pipe(proxyReq, { end: true });
+        return;
+    }
+
+    let filePath = path.join(STATIC_DIR, pathname);
+    
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+        filePath = path.join(filePath, 'index.html');
+    }
+
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+        filePath = path.join(STATIC_DIR, 'index.html');
+    }
+
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        const ext = path.extname(filePath);
+        const contentType = mimeTypes[ext] || 'application/octet-stream';
+        
+        res.writeHead(200, { 'Content-Type': contentType });
+        fs.createReadStream(filePath).pipe(res);
+    } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('404 Not Found');
+    }
+});
+
+server.listen(PORT, () => {
+    console.log(`[Server] Professional Engine running on port ${PORT}`);
+});
+SERVER_MJS_EOF
+
+            # ── BUILD NODE PROJECTS ──
+            if [ -f "$USER_DIR/package.json" ]; then
+              echo "📦 Node.js project detected. Installing and building..."
+              cd "$USER_DIR"
+              npm install --no-audit --no-fund > "/tmp/${KEY}_npm_install.log" 2>&1
+              if npm run | grep -q "build"; then
+                npm run build > "/tmp/${KEY}_npm_build.log" 2>&1
+              fi
+              cd - > /dev/null
+            fi
+
+            # Start local PHP fallback server
+            local PHP_PORT=$((PORT + 1000))
+            php -S 127.0.0.1:$PHP_PORT -t "$USER_DIR" > "/tmp/${KEY}_php.log" 2>&1 &
             local PHP_PID=$!
-            echo "  🖥  PHP on port $PORT (PID: $PHP_PID)"
+
+            # Start Professional Node Serverless & Static Engine
+            PORT=$PORT USER_DIR="$USER_DIR" node "$USER_DIR/server.mjs" > "/tmp/${KEY}_node.log" 2>&1 &
+            local NODE_PID=$!
+
+            echo "  🖥  PHP on port $PHP_PORT (PID: $PHP_PID)"
+            echo "  🖥  Node on port $PORT (PID: $NODE_PID)"
 
             # Start Cloudflare tunnel
             if [ "$PLAN" == "studio" ] && [ -f "$USER_DIR/cf_token.txt" ]; then
@@ -229,6 +411,7 @@ jobs:
             if [ -z "$URL" ]; then
               echo "  ❌ Tunnel failed for $KEY"
               kill $PHP_PID 2>/dev/null || true
+              kill $NODE_PID 2>/dev/null || true
               kill $TUNNEL_PID 2>/dev/null || true
               redis_cmd "[\"HSET\", \"session:$KEY\", \"status\", \"offline\", \"url\", \"\"]" > /dev/null
               return
@@ -237,6 +420,7 @@ jobs:
             # Store state
             local NOW=$(date +%s)
             USER_PHP_PID[$KEY]=$PHP_PID
+            USER_NODE_PID[$KEY]=$NODE_PID
             USER_TUNNEL_PID[$KEY]=$TUNNEL_PID
             USER_PORT[$KEY]=$PORT
             USER_SESSION_START[$KEY]=$NOW
@@ -271,6 +455,7 @@ jobs:
             echo "🔴 Stopping $KEY: $REASON"
 
             kill "${USER_PHP_PID[$KEY]}" 2>/dev/null || true
+            kill "${USER_NODE_PID[$KEY]}" 2>/dev/null || true
             kill "${USER_TUNNEL_PID[$KEY]}" 2>/dev/null || true
 
             local NOW=$(date +%s)
@@ -284,6 +469,7 @@ jobs:
             rm -f "sessions/${KEY}.txt" 2>/dev/null || true
 
             unset USER_PHP_PID[$KEY]
+            unset USER_NODE_PID[$KEY]
             unset USER_TUNNEL_PID[$KEY]
             unset USER_PORT[$KEY]
             unset USER_SESSION_START[$KEY]
@@ -368,8 +554,8 @@ jobs:
               if [ $SESSION_ELAPSED -ge $LIMIT ]; then
                 KEYS_TO_EXPIRE+=("$KEY")
               fi
-              if ! kill -0 "${USER_PHP_PID[$KEY]}" 2>/dev/null; then
-                echo "⚠️  PHP process for $KEY died unexpectedly"
+               if ! kill -0 "${USER_NODE_PID[$KEY]}" 2>/dev/null; then
+                echo "⚠️  Node process for $KEY died unexpectedly"
                 KEYS_TO_EXPIRE+=("$KEY")
               fi
             done
