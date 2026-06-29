@@ -185,7 +185,9 @@
 
             // Send pure JSON so Vercel auto-parses req.body properly
             const endpoint = authMode === 'login' ? '/api/login' : '/api/register';
-            const body = JSON.stringify({ username, password });
+            const body = authMode === 'register'
+                ? JSON.stringify({ username, password, tos: true })
+                : JSON.stringify({ username, password });
 
             fetch(endpoint, { method: 'POST', body, headers: { 'Content-Type': 'application/json' } })
             .then(res => {
