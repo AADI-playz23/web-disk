@@ -129,6 +129,16 @@
                 <form onsubmit="handleAuth(event)">
                     <input type="text" id="userIn" class="bill-input" placeholder="Username" required minlength="3">
                     <input type="password" id="passIn" class="bill-input" placeholder="Password" required minlength="4">
+                    <div id="tos-group" style="display:none; margin: 6px 0 12px 0; text-align:left;">
+                        <label style="display:flex; align-items:flex-start; gap:10px; font-size:0.82rem; color:var(--muted,#94a3b8); cursor:pointer; line-height:1.5;">
+                            <input type="checkbox" id="tos-check" style="margin-top:3px; accent-color:#6366f1; width:15px; height:15px; flex-shrink:0;">
+                            <span>I agree to the
+                                <a href="https://absoracloud.free.je/tos.html" target="_blank" style="color:#6366f1; text-decoration:underline;">Terms of Service</a>,
+                                <a href="https://absoracloud.free.je/privacy.html" target="_blank" style="color:#6366f1; text-decoration:underline;">Privacy Policy</a>, and
+                                <a href="https://absoracloud.free.je/refund.html" target="_blank" style="color:#6366f1; text-decoration:underline;">Refund Policy</a>.
+                            </span>
+                        </label>
+                    </div>
                     <button type="submit" id="authBtn" class="btn btn-primary">Initialize Session</button>
                 </form>
                 <div id="authMsg" class="auth-msg"></div>
@@ -150,6 +160,8 @@
             document.getElementById('authBtn').textContent = mode === 'login' ? 'Initialize Session' : 'Create Account';
             document.getElementById('authMsg').textContent = '';
             document.getElementById('authMsg').className = 'auth-msg';
+            document.getElementById('tos-group').style.display = mode === 'login' ? 'none' : 'block';
+            document.getElementById('tos-check').checked = false;
         }
 
         function handleAuth(e) {
@@ -162,6 +174,14 @@
             btn.disabled = true;
             btn.textContent = authMode === 'login' ? 'Authenticating...' : 'Creating Account...';
             msgEl.textContent = '';
+
+            if (authMode === 'register' && !document.getElementById('tos-check').checked) {
+                msgEl.textContent = 'Please agree to the Terms of Service, Privacy Policy, and Refund Policy.';
+                msgEl.className = 'auth-msg error';
+                btn.disabled = false;
+                btn.textContent = 'Create Account';
+                return;
+            }
 
             // Send pure JSON so Vercel auto-parses req.body properly
             const endpoint = authMode === 'login' ? '/api/login' : '/api/register';
